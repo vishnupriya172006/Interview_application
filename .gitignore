@@ -1,0 +1,33 @@
+# JavaScript dependencies and generated builds
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+
+# Python bytecode, environments, and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Local configuration and secrets (commit .env.example files only)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local runtime data and generated output
+*.db
+*.sqlite
+*.sqlite3
+backend/reports/
+uploads/
+
+# IDE and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
