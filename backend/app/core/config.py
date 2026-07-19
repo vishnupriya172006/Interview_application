@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = "noreply@interviewguard.ai"
+    PUBLIC_APP_URL: str = ""
     FRONTEND_URLS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     BASE_DIR: Path = Path(__file__).resolve().parents[2]
     REPORTS_DIR: Path = BASE_DIR / "reports"

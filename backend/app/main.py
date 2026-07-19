@@ -1,8 +1,12 @@
 from contextlib import asynccontextmanager
 import logging
 
-from fastapi import FastAPI
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from socketio import ASGIApp
 from sqlalchemy import text
 
@@ -12,6 +16,7 @@ from app.core.database import Base, engine
 from app.sockets.handlers import sio
 
 logger = logging.getLogger(__name__)
+FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend-dist"
 
 
 @asynccontextmanager
@@ -49,8 +54,8 @@ app.include_router(reports, prefix=f"{settings.API_V1_STR}/reports", tags=["repo
 app.include_router(monitoring, prefix=f"{settings.API_V1_STR}/monitoring", tags=["monitoring"])
 
 
-@app.get("/", tags=["health"])
-def read_root():
+@app.get("/health", tags=["health"])
+def health_check():
     return {
         "status": "online",
         "app": settings.PROJECT_NAME,
@@ -62,3 +67,22 @@ def read_root():
 # Keep Socket.IO isolated under its conventional endpoint while preserving a
 # FastAPI object for dependency overrides, OpenAPI, and middleware.
 app.mount("/socket.io", ASGIApp(sio, socketio_path=""))
+
+# The production Docker image includes the built Vite client. Serving it from
+# FastAPI gives the browser one public Railway origin for the app, REST API,
+# and Socket.IO signalling server.
+if FRONTEND_DIST.is_dir():
+    assets_dir = FRONTEND_DIST / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def serve_frontend(path: str):
+        requested_file = (FRONTEND_DIST / path).resolve()
+        if requested_file.is_relative_to(FRONTEND_DIST) and requested_file.is_file():
+            return FileResponse(requested_file)
+        return FileResponse(FRONTEND_DIST / "index.html")
+else:
+    @app.get("/", include_in_schema=False)
+    def local_root():
+        return health_check()

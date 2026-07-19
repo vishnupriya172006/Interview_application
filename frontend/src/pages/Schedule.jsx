@@ -53,7 +53,7 @@ const Schedule = () => {
 
   const copyToClipboard = () => {
     if (!successData) return;
-    const link = `http://localhost:5173/meeting-check?room=${successData.meeting_id}`;
+    const link = `${window.location.origin}/meeting-check?room=${successData.meeting_id}`;
     navigator.clipboard.writeText(link);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -86,7 +86,7 @@ const Schedule = () => {
             </p>
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 p-3 bg-dark-900 rounded-lg border border-dark-800 text-xs font-mono">
               <span className="flex-1 truncate">
-                http://localhost:5173/meeting-check?room={successData.meeting_id}
+                {window.location.origin}/meeting-check?room={successData.meeting_id}
               </span>
               <button 
                 onClick={copyToClipboard}

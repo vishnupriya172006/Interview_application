@@ -204,14 +204,14 @@ docker-compose up --build
 ### Method 2: Manual Local Build
 
 #### 1. Backend Setup
-Make sure Python 3.12+ is installed:
+Make sure Python 3.11+ is installed:
 
 ```bash
 cd backend
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
-python app/main.py
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 *Note: On first startup, the server automatically downloads the COCO-pre-trained YOLOv8 weights (`yolov8n.pt`) and initializes local SQLite database tables if PostgreSQL credentials are left blank.*
@@ -224,6 +224,31 @@ cd frontend
 npm install
 npm run dev
 ```
+
+### Railway deployment
+
+This repository deploys as one Railway service. The root `railway.json` selects
+the production Dockerfile, which builds the React client and serves it from the
+FastAPI application. This gives the recruiter and candidate a single public URL
+for the UI, REST API, and Socket.IO signalling.
+
+1. Create a Railway project from this GitHub repository. No start command is needed.
+2. Add a Railway PostgreSQL service and set the web service's `DATABASE_URL` to
+   the PostgreSQL service's `DATABASE_URL` reference.
+3. Set `SECRET_KEY` to a strong random value and set `PUBLIC_APP_URL` to the
+   generated Railway domain (for invitation emails).
+4. Optionally set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and
+   `SMTP_FROM` to enable email delivery.
+
+Railway runs:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+The health endpoint is `/health`. See `.env.example` for the environment
+variable names. `docker-compose.yml` remains available for local multi-container
+development and is excluded from the Railway image build.
 
 ---
 

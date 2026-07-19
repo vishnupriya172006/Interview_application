@@ -8,8 +8,11 @@ export const SocketProvider = ({ children }) => {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    // Establish a connection with the ASGI FastAPI + Socket.IO server on backend port 8000
-    const newSocket = io('http://127.0.0.1:8000', {
+    // Same-origin by default: works locally and after Railway deployment.
+    const socketUrl = import.meta.env.VITE_SOCKET_URL || (
+      import.meta.env.DEV ? 'http://127.0.0.1:8000' : window.location.origin
+    );
+    const newSocket = io(socketUrl, {
       autoConnect: false,
       transports: ['websocket', 'polling']
     });
