@@ -12,7 +12,8 @@ from sqlalchemy import text
 
 from app.api import auth, interviews, monitoring, reports
 from app.core.config import settings
-from app.core.database import Base, engine
+from app.core.database import engine
+from app.core.model_loader import ensure_deepfake_model
 from app.sockets.handlers import sio
 
 logger = logging.getLogger(__name__)
@@ -21,13 +22,11 @@ FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend-dist"
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Verify PostgreSQL and ensure the current schema exists before serving."""
-    import app.models  # Register every model with Base.metadata.
-
+    """Verify the database connection; migrations run before the server starts."""
+    ensure_deepfake_model()
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
-    Base.metadata.create_all(bind=engine)
-    logger.info("Database connection verified and schema is ready.")
+    logger.info("Database connection verified.")
     yield
     engine.dispose()
 
@@ -57,7 +56,7 @@ app.include_router(monitoring, prefix=f"{settings.API_V1_STR}/monitoring", tags=
 @app.get("/health", tags=["health"])
 def health_check():
     return {
-        "status": "online",
+        "status": "healthy",
         "app": settings.PROJECT_NAME,
         "version": settings.VERSION,
         "docs_url": "/docs",

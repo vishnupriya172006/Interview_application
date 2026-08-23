@@ -8,7 +8,7 @@ export const SocketProvider = ({ children }) => {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    // Same-origin by default: works locally and after Railway deployment.
+    // VITE_SOCKET_URL is required when frontend and backend are separate Render services.
     const socketUrl = import.meta.env.VITE_SOCKET_URL || (
       import.meta.env.DEV ? 'http://127.0.0.1:8000' : window.location.origin
     );

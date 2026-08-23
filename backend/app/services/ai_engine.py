@@ -38,9 +38,8 @@ class AIEngine:
                 self.deepfake_detector = DeepfakeDetector(settings.DEEPFAKE_MODEL_PATH)
                 print("[AI ENGINE] ✓ Deepfake Detector initialized successfully.")
             else:
-                print(f"[AI ENGINE] WARNING: Deepfake model file not found at {settings.DEEPFAKE_MODEL_PATH}")
-                print("[AI ENGINE]   Initializing with random weights. Train a model and place it at the specified path.")
-                self.deepfake_detector = DeepfakeDetector(settings.DEEPFAKE_MODEL_PATH)
+                print(f"[AI ENGINE] WARNING: trained deepfake model not found at {settings.DEEPFAKE_MODEL_PATH}; deepfake detection is disabled.")
+                self.deepfake_detector = None
         except ImportError as e:
             print(f"[AI ENGINE] WARNING: Could not import DeepfakeDetector: {e}")
             self.deepfake_detector = None
@@ -51,6 +50,9 @@ class AIEngine:
     def _initialize_yolo(self):
         try:
             from ultralytics import YOLO
+            if not os.path.exists(settings.YOLO_MODEL_PATH):
+                print(f"[AI ENGINE] WARNING: YOLO weights not found at {settings.YOLO_MODEL_PATH}; phone detection is disabled.")
+                return
             self.yolo_model = YOLO(settings.YOLO_MODEL_PATH)
             print("[AI ENGINE] ✓ YOLOv8 Phone Detector initialized successfully.")
         except ImportError:
@@ -63,24 +65,16 @@ class AIEngine:
     def _initialize_mediapipe(self):
         try:
             import mediapipe as mp
-            from mediapipe.tasks.python import vision
-
-            print("[AI ENGINE] ✓ MediaPipe detected")
-            self.face_mesh = None
-
-            # FaceLandmarker model file is not bundled in this repo. Use local model if available.
-            model_path = os.path.join(os.getcwd(), "models", "face_landmarker.task")
-            if os.path.exists(model_path):
-                self.face_mesh = vision.FaceLandmarker.create(
-                    model_path=model_path,
-                    min_detection_confidence=0.5,
-                    min_tracking_confidence=0.5
-                )
-                print("[AI ENGINE] ✓ MediaPipe Face Landmarker initialized successfully.")
-            else:
-                print("[AI ENGINE] WARNING: MediaPipe face_landmarker.task model file not found.")
-                print("[AI ENGINE]   Place it at models/face_landmarker.task to enable gaze/liveness detection.")
-                self.face_mesh = None
+            # The legacy FaceMesh API supplies the process() method used below
+            # and downloads no external task file at runtime.
+            self.face_mesh = mp.solutions.face_mesh.FaceMesh(
+                static_image_mode=False,
+                max_num_faces=1,
+                refine_landmarks=True,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            print("[AI ENGINE] ✓ MediaPipe Face Mesh initialized successfully.")
         except ImportError:
             print("[AI ENGINE] WARNING: MediaPipe not installed. Gaze and liveness detection will be disabled.")
             self.face_mesh = None

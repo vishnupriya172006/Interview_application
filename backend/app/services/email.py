@@ -14,7 +14,7 @@ def send_interview_invitation(
     Sends a styled HTML email invitation containing the meeting room details and join URL.
     Falls back to log output if SMTP settings are not provided or error occurs.
     """
-    base_url = settings.PUBLIC_APP_URL.rstrip("/") or "http://localhost:5173"
+    base_url = (settings.INTERVIEW_BASE_URL or settings.FRONTEND_BASE_URL).rstrip("/") or "http://localhost:5173"
     join_url = f"{base_url}/meeting-check?room={meeting_id}"
     
     html_content = f"""

@@ -1,266 +1,84 @@
 # InterviewGuard AI
-> **A Multimodal Framework for Real-Time Deepfake Detection and Interview Integrity Assessment in Live Video Interviews**
 
-InterviewGuard AI is an end-to-end, production-ready full-stack application designed to secure online video interviews. It uses a multimodal deep learning and computer vision framework to continuously evaluate candidate integrity in real-time, detecting face deepfake injects, monitoring gaze offsets, assessing physical liveness indicators, and identifying unauthorized mobile device presence.
+InterviewGuard AI is a React/Vite and FastAPI application for scheduling and monitoring live interviews. It uses PostgreSQL, Socket.IO/WebRTC signalling, PDF reports, YOLOv8 phone detection, and optional trained deepfake inference.
 
----
+## Architecture
 
-## 🏛️ System Architecture
+`Browser → Render frontend (Nginx) → Render backend (FastAPI + Socket.IO) → Render PostgreSQL`
 
-The application is structured into decoupled frontend, backend, and machine learning components:
+The frontend calls the backend using `VITE_API_URL` and Socket.IO uses `VITE_SOCKET_URL`. Both must be HTTPS Render URLs in production; Socket.IO automatically upgrades to secure WebSockets (`wss://`) from an HTTPS page.
 
-```mermaid
-graph TD
-    subgraph Client [Browser Clients]
-        Recruiter[Recruiter Dashboard]
-        Candidate[Candidate Lobby & Room]
-    end
+## Local Docker setup
 
-    subgraph Backend [FastAPI Server]
-        API[REST Routing & Auth]
-        Socket[Socket.IO Server]
-        AIEngine[Multimodal AI Engine]
-        PDFGen[ReportLab PDF Service]
-    end
+1. Copy `.env.example` to `.env` and set `POSTGRES_PASSWORD` and `JWT_SECRET`.
+2. Run `docker compose up --build`.
+3. Open http://localhost:5173. The API is http://localhost:8000, docs are http://localhost:8000/docs, and health is http://localhost:8000/health.
 
-    subgraph MLPipeline [ML Models & CV]
-        PyTorch[Deepfake Classifier - EfficientNet]
-        YOLO[YOLOv8 Object Detector]
-        FaceMesh[MediaPipe Face Mesh]
-    end
+Compose starts PostgreSQL, waits for it to become healthy, runs `alembic upgrade head`, then starts FastAPI. Reports persist in the `reports_data` Docker volume.
 
-    subgraph DB [Database Layer]
-        Postgres[(PostgreSQL)]
-    end
+For non-Docker development, install backend dependencies, configure `DATABASE_URL`, run `alembic upgrade head`, then run:
 
-    Candidate -- "1. Video call (P2P stream)" --- Recruiter
-    Candidate -- "2. Socket.IO base64 frame stream" --> Socket
-    Socket --> AIEngine
-    AIEngine --> PyTorch
-    AIEngine --> YOLO
-    AIEngine --> FaceMesh
-    AIEngine -- "3. Telemetry Updates" --> Socket
-    Socket -- "4. Real-time Metrics & Alarms" --> Recruiter
-    AIEngine -- "5. Logs Transactions" --> Postgres
-    Recruiter -- "6. Finalizes session" --> API
-    API --> PDFGen
-    PDFGen --> Postgres
-    PDFGen -- "7. Compiles PDF Certificate" --> Recruiter
-```
-
----
-
-## 📊 Database Design (ER Diagram)
-
-The PostgreSQL database holds the following schemas and connections:
-
-```mermaid
-erDiagram
-    USERS ||--o{ INTERVIEWS : conducts
-    INTERVIEWS ||--o{ MONITORING_EVENTS : logs
-    INTERVIEWS ||--o{ DEEPFAKE_PREDICTIONS : predicts
-    INTERVIEWS ||--o{ EYE_GAZE_LOGS : tracks
-    INTERVIEWS ||--o{ PHONE_DETECTION_LOGS : scans
-    INTERVIEWS ||--o{ LIVENESS_LOGS : verifies
-    INTERVIEWS ||--o{ REPORTS : compiles
-
-    USERS {
-        string id PK
-        string email UK
-        string hashed_password
-        string full_name
-        string company_name
-        timestamp created_at
-    }
-
-    INTERVIEWS {
-        string id PK
-        string recruiter_id FK
-        string candidate_name
-        string candidate_email
-        string meeting_id UK
-        timestamp scheduled_at
-        integer duration_minutes
-        string status
-        float integrity_score
-        string risk_level
-        timestamp created_at
-    }
-
-    MONITORING_EVENTS {
-        string id PK
-        string interview_id FK
-        timestamp timestamp
-        string event_type
-        string severity
-        string details
-    }
-
-    DEEPFAKE_PREDICTIONS {
-        string id PK
-        string interview_id FK
-        timestamp timestamp
-        float score
-        string label
-    }
-
-    EYE_GAZE_LOGS {
-        string id PK
-        string interview_id FK
-        timestamp timestamp
-        float horizontal_gaze
-        float vertical_gaze
-        string gaze_direction
-        boolean looking_away
-        float attention_score
-    }
-
-    PHONE_DETECTION_LOGS {
-        string id PK
-        string interview_id FK
-        timestamp timestamp
-        boolean phone_detected
-        float confidence
-        integer count
-    }
-
-    LIVENESS_LOGS {
-        string id PK
-        string interview_id FK
-        timestamp timestamp
-        boolean is_live
-        float blink_rate
-        float head_movement_score
-        float smile_score
-    }
-
-    REPORTS {
-        string id PK
-        string interview_id FK
-        string pdf_path
-        float integrity_score
-        string risk_level
-        timestamp generated_at
-    }
-```
-
----
-
-## 🔄 Sequence Flow Diagram
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Candidate
-    actor Recruiter
-    participant Socket as Socket.IO Server
-    participant AI as AI Engine
-    participant DB as PostgreSQL DB
-
-    Recruiter->>Socket: Join meeting room (role: recruiter)
-    Candidate->>Socket: Join meeting room (role: candidate)
-    Socket->>Recruiter: Alert: Candidate joined lobby
-
-    Note over Candidate, Recruiter: WebRTC handshakes (signaled via Socket.IO)
-    Recruiter->>Socket: Send RTC Offer
-    Socket->>Candidate: Forward RTC Offer
-    Candidate->>Socket: Send RTC Answer
-    Socket->>Recruiter: Forward RTC Answer
-    Note over Candidate, Recruiter: WebRTC P2P Call Connected
-
-    loop Continuous AI Assessment (5 FPS)
-        Candidate->>Socket: stream_frame (Base64 JPEG)
-        Socket->>AI: Decode & run models (YOLOv8 + MediaPipe + PyTorch)
-        AI->>DB: Log frame coordinates & alert incidents
-        AI->>Socket: Broadcast real-time metrics payload
-        Socket->>Recruiter: metrics_update (deepfake %, gaze, phone alerts, overlay box)
-    end
-
-    Recruiter->>Socket: Clicks "End Session"
-    Socket->>AI: Trigger final report assembly
-    AI->>DB: Query session logs & calculate final metrics
-    AI->>DB: Generate Report PDF via ReportLab
-    AI->>Recruiter: Complete report and display PDF download
-```
-
----
-
-## 🛠️ Installation & Quickstart
-
-InterviewGuard AI can be deployed instantly using Docker Compose or built locally.
-
-### Method 1: Docker Compose (Recommended)
-
-One command spins up the Postgres Database, FastAPI application, and React Client:
-
-```bash
-docker-compose up --build
-```
-
-- **Frontend Client**: Access at [http://localhost:5173](http://localhost:5173)
-- **FastAPI Core**: Access at [http://localhost:8000](http://localhost:8000)
-- **Swagger Documentation**: Access at [http://localhost:8000/docs](http://localhost:8000/docs)
-
-### Method 2: Manual Local Build
-
-#### 1. Backend Setup
-Make sure Python 3.11+ is installed:
-
-```bash
+```powershell
 cd backend
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-*Note: On first startup, the server automatically downloads the COCO-pre-trained YOLOv8 weights (`yolov8n.pt`) and initializes local SQLite database tables if PostgreSQL credentials are left blank.*
+Start the frontend separately with `cd frontend; npm ci; npm run dev`. Its default local API and Socket.IO targets are `http://127.0.0.1:8000`.
 
-#### 2. Frontend Setup
-Make sure Node.js is installed:
+## Render deployment
 
-```bash
-cd frontend
-npm install
-npm run dev
+Create a Render PostgreSQL instance first. Then create two Docker Web Services from this repository. Use repository root (`.`) as the Root Directory for both services because the backend image packages the shared `training/` and `models/` directories.
+
+### Backend service
+
+- Dockerfile path: `backend/Dockerfile`
+- Health check path: `/health`
+- Docker command: handled by the Dockerfile; it runs migrations, then Uvicorn on Render's `PORT`.
+
+Set these environment variables:
+
+```text
+ENVIRONMENT=production
+DATABASE_URL=<Render PostgreSQL internal connection string>
+JWT_SECRET=<long random secret>
+FRONTEND_BASE_URL=https://<frontend>.onrender.com
+INTERVIEW_BASE_URL=https://<frontend>.onrender.com
+FRONTEND_URLS=["https://<frontend>.onrender.com"]
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASSWORD=
+SMTP_FROM=
+MODEL_PATH=/app/models/deepfake_model.pth
+MODEL_URL=
+YOLO_MODEL_PATH=/app/models/yolov8n.pt
 ```
 
-### Railway deployment
+`DATABASE_URL` may use Render's legacy `postgres://` scheme; the application normalizes it. Leave SMTP variables blank if email is not configured—the interview is still saved and its link is returned. `FRONTEND_URLS` must be JSON as shown.
 
-This repository deploys as one Railway service. The root `railway.json` selects
-the production Dockerfile, which builds the React client and serves it from the
-FastAPI application. This gives the recruiter and candidate a single public URL
-for the UI, REST API, and Socket.IO signalling.
+### Frontend service
 
-1. Create a Railway project from this GitHub repository. No start command is needed.
-2. Add a Railway PostgreSQL service and set the web service's `DATABASE_URL` to
-   the PostgreSQL service's `DATABASE_URL` reference.
-3. Set `SECRET_KEY` to a strong random value and set `PUBLIC_APP_URL` to the
-   generated Railway domain (for invitation emails).
-4. Optionally set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and
-   `SMTP_FROM` to enable email delivery.
+- Dockerfile path: `frontend/Dockerfile`
+- Set these **Docker build arguments** (not only runtime environment variables, because Vite embeds them while building):
 
-Railway runs:
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```text
+VITE_API_URL=https://<backend>.onrender.com/api
+VITE_SOCKET_URL=https://<backend>.onrender.com
 ```
 
-The health endpoint is `/health`. See `.env.example` for the environment
-variable names. `docker-compose.yml` remains available for local multi-container
-development and is excluded from the Railway image build.
+After deploying, update the backend's frontend URLs to the frontend service URL, then redeploy the backend. Never put database, JWT, or SMTP secrets in frontend variables.
 
----
+## ML models
 
-## 🧠 Multimodal DL Model Pipelines
+`models/yolov8n.pt` is included (about 6.5 MB) and is a real pre-trained COCO YOLOv8 model used to identify cell phones. It is not a deepfake model.
 
-1. **Face Deepfake Classification (`training/`)**:
-   - Model weights training scripts are structured under `training/dataset.py` and `training/train.py`.
-   - Incorporates a PyTorch `DeepfakeClassifier` custom CNN backbone which can wrap pre-trained ResNet/EfficientNet models.
-   - Evaluates frame inputs returning a decimal float percentage of spoof confidence.
-2. **Device Detection (YOLOv8)**:
-   - Uses `ultralytics` YOLOv8 nano detector.
-   - Filters target detection for COCO class index 67 ("cell phone") with custom confidence thresholds (> 0.4).
-3. **Blink, Gaze & Smile Liveness (MediaPipe)**:
-   - Uses refined Iris landmarks to track eye aspect ratio (EAR) and gaze vectors (left/right/center).
-   - Measures distance deltas for candidate smiles to confirm presence of dynamic expressions.
+No trained deepfake classifier is present in this repository. The application does **not** run random weights or claim a deepfake result when it is absent. Supply a compatible trained checkpoint with `MODEL_PATH`, or supply a protected direct `MODEL_URL`; it is downloaded only when the local model is missing. If unavailable, deepfake detection is disabled while the remaining monitoring components continue.
+
+MediaPipe Face Mesh is initialized from the installed MediaPipe package; it does not require a separate model file. A production deployment should use persistent storage or an artifact URL for any model too large for the Docker image.
+
+## Troubleshooting
+
+- If migrations fail, confirm the backend uses Render's PostgreSQL **internal** URL and that it is reachable from the backend service.
+- If browser requests fail, check `VITE_API_URL`, `VITE_SOCKET_URL`, and the backend `FRONTEND_URLS` JSON value.
+- If camera access fails, use the deployed HTTPS frontend (browser camera and microphone access requires a secure context outside localhost).
+- Report PDF files are container-local on Render unless you attach persistent storage or move them to object storage; database report records remain in PostgreSQL.

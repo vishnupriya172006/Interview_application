@@ -24,7 +24,7 @@ class DeepfakeDetector:
             self.model.load_state_dict(torch.load(model_path, map_location=self.device))
             print(f"Loaded Deepfake Detector weights from: {model_path}")
         else:
-            print(f"Warning: Deepfake model weights file not found at: {model_path}. Model will run with random weights.")
+            raise FileNotFoundError(f"Trained deepfake model weights not found: {model_path}")
             
         self.model.to(self.device)
         self.model.eval()

@@ -6,7 +6,9 @@ frontend/dist/
 
 # Python bytecode, environments, and test caches
 __pycache__/
+**/__pycache__/
 *.py[cod]
+*.pyc
 .pytest_cache/
 .venv/
 venv/
@@ -25,6 +27,8 @@ env/
 *.sqlite3
 backend/reports/
 uploads/
+build/
+*.log
 
 # IDE and operating-system files
 .vscode/
