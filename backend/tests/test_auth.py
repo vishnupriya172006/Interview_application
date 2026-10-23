@@ -67,3 +67,77 @@ def test_register_duplicate_email(client):
     response = client.post(f"{settings.API_V1_STR}/auth/register", json=payload)
     assert response.status_code == 400
     assert "already exists" in response.json()["detail"]
+
+
+def test_access_token_cannot_be_used_as_password_reset_token(client):
+    payload = {
+        "email": "recruiter@company.com",
+        "password": "secure_password123",
+        "full_name": "Test Recruiter",
+    }
+    client.post(f"{settings.API_V1_STR}/auth/register", json=payload)
+    login = client.post(f"{settings.API_V1_STR}/auth/login", json={
+        "email": payload["email"],
+        "password": payload["password"],
+    }).json()
+    response = client.post(f"{settings.API_V1_STR}/auth/reset-password", json={
+        "token": login["access_token"],
+        "new_password": "new_secure_password123",
+    })
+    assert response.status_code == 400
+
+
+def test_password_recovery_does_not_claim_email_was_sent(client):
+    response = client.post(f"{settings.API_V1_STR}/auth/forgot-password", json={"email": "person@example.com"})
+    assert response.status_code == 200
+    assert "if the address matches" in response.json()["message"].lower()
+
+
+def test_password_recovery_sends_reset_only_token_without_returning_it(client, monkeypatch):
+    import importlib
+    auth = importlib.import_module("app.api.auth")
+    from app.core.security import decode_access_token
+
+    email = "recruiter@company.com"
+    client.post(f"{settings.API_V1_STR}/auth/register", json={
+        "email": email,
+        "password": "secure_password123",
+        "full_name": "Test Recruiter",
+    })
+    sent = []
+    monkeypatch.setattr(auth, "send_password_reset_email", lambda address, token: sent.append((address, token)) or True)
+
+    response = client.post(f"{settings.API_V1_STR}/auth/forgot-password", json={"email": email})
+    assert response.status_code == 200
+    assert email not in response.text
+    assert len(sent) == 1
+    assert sent[0][0] == email
+    assert decode_access_token(sent[0][1]) is None
+    assert decode_access_token(sent[0][1], expected_use="password_reset") == email
+
+
+def test_password_reset_token_can_reset_password(client):
+    from datetime import timedelta
+    from app.core.security import create_access_token
+
+    email = "recruiter@company.com"
+    client.post(f"{settings.API_V1_STR}/auth/register", json={
+        "email": email,
+        "password": "secure_password123",
+        "full_name": "Test Recruiter",
+    })
+    reset_token = create_access_token(
+        email,
+        expires_delta=timedelta(hours=1),
+        token_use="password_reset",
+    )
+    reset = client.post(f"{settings.API_V1_STR}/auth/reset-password", json={
+        "token": reset_token,
+        "new_password": "updated_password123",
+    })
+    assert reset.status_code == 200
+    login = client.post(f"{settings.API_V1_STR}/auth/login", json={
+        "email": email,
+        "password": "updated_password123",
+    })
+    assert login.status_code == 200

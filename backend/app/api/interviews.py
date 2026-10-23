@@ -1,25 +1,22 @@
-import random
-import string
-from fastapi import APIRouter, Depends, HTTPException, status
+import secrets
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from typing import List
 
 from app.core.database import get_db
 from app.api.deps import get_current_user
 from app.models.user import User
+from app.core.security import decode_access_token
 from app.models.interview import Interview
-from app.schemas.interview import InterviewCreate, InterviewOut
+from app.schemas.interview import InterviewCreate, InterviewOut, InterviewJoinOut
 from app.services.email import send_interview_invitation
 from app.services.pdf_generator import generate_pdf_report
 
 router = APIRouter()
 
 def generate_meeting_id() -> str:
-    """Generates a unique 9-digit dash-separated meeting code, e.g. 182-938-192."""
-    p1 = ''.join(random.choices(string.digits, k=3))
-    p2 = ''.join(random.choices(string.digits, k=3))
-    p3 = ''.join(random.choices(string.digits, k=3))
-    return f"{p1}-{p2}-{p3}"
+    """Generate a high-entropy invitation code; the code is a bearer credential."""
+    return secrets.token_urlsafe(24)
 
 
 @router.post("/schedule", response_model=InterviewOut)
@@ -73,7 +70,7 @@ def list_interviews(
     return db.query(Interview).filter(Interview.recruiter_id == current_user.id).order_by(Interview.scheduled_at.desc()).all()
 
 
-@router.get("/validate/{meeting_id}", response_model=InterviewOut)
+@router.get("/validate/{meeting_id}", response_model=InterviewJoinOut)
 def validate_meeting(meeting_id: str, db: Session = Depends(get_db)):
     """
     Public validation endpoint.
@@ -101,15 +98,27 @@ def validate_meeting(meeting_id: str, db: Session = Depends(get_db)):
 @router.post("/end/{meeting_id}", response_model=InterviewOut)
 def end_interview(
     meeting_id: str,
+    request: Request,
     db: Session = Depends(get_db)
 ):
     """
     Ends the interview, changes state to 'completed', and compiles the PDF integrity report.
-    Can be called by either candidate or recruiter.
+    The candidate may end their own meeting by presenting its invitation code.
     """
     interview = db.query(Interview).filter(Interview.meeting_id == meeting_id).first()
     if not interview:
         raise HTTPException(status_code=404, detail="Interview not found.")
+
+    # The candidate invitation is a capability for this one meeting. Recruiters
+    # must present a valid JWT belonging to the interview owner.
+    invitation_code = request.headers.get("x-meeting-code")
+    authorization = request.headers.get("authorization", "")
+    subject = decode_access_token(authorization.removeprefix("Bearer ")) if authorization.startswith("Bearer ") else None
+    owner = db.query(User).filter(User.id == subject).first() if subject else None
+    if owner is None and subject:
+        owner = db.query(User).filter(User.email == subject).first()
+    if (owner is None or owner.id != interview.recruiter_id) and invitation_code != meeting_id:
+        raise HTTPException(status_code=403, detail="Meeting authorization required.")
         
     if interview.status == "completed":
         return interview

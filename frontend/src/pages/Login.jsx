@@ -84,9 +84,9 @@ const Login = () => {
           {/* Password Reset Confirmation */}
           {resetSent && showForgot && (
             <div className="p-4 rounded-lg bg-emerald-500/15 border border-emerald-500/20 text-emerald-400 text-sm mb-6 space-y-2">
-              <p className="font-bold">Recovery Instructions Sent</p>
+              <p className="font-bold">Check your email</p>
               <p className="text-xs opacity-90 leading-relaxed">
-                If the email is registered in our database, password reset instructions have been logged. Please inspect your SMTP server console logs for simulated recovery link coordinates.
+                If the address matches an account and recovery email is configured, instructions will be sent. The reset link expires after one hour.
               </p>
             </div>
           )}
@@ -143,7 +143,7 @@ const Login = () => {
                 <div className="h-5 w-5 animate-spin rounded-full border-2 border-t-transparent border-white"></div>
               ) : (
                 <>
-                  {showForgot ? 'Send Recovery Code' : 'Secure Sign In'}
+                  {showForgot ? 'Request Reset Link' : 'Secure Sign In'}
                   <ChevronRight className="h-4 w-4" />
                 </>
               )}
@@ -161,7 +161,7 @@ const Login = () => {
               </button>
             ) : (
               <p>
-                Don't have an account?{' '}
+                Don&apos;t have an account?{' '}
                 <Link to="/signup" className="text-brand-400 hover:text-brand-300 font-semibold transition-colors">
                   Create one now
                 </Link>

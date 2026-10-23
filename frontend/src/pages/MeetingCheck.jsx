@@ -9,7 +9,6 @@ import {
   Wifi, 
   AlertCircle,
   VideoOff,
-  MicOff
 } from 'lucide-react';
 
 const MeetingCheck = () => {
@@ -75,7 +74,7 @@ const MeetingCheck = () => {
       setLatency(`${Date.now() - start} ms`);
       
     } catch (err) {
-      console.error('Device access denied:', err);
+      console.error('Device access was denied or unavailable.');
       // Check individual permissions if possible
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
@@ -210,7 +209,7 @@ const MeetingCheck = () => {
                   Enter Meeting Room
                 </button>
                 <p className="text-[10px] text-center text-dark-300 leading-relaxed">
-                  By joining, you agree to allow <b>InterviewGuard AI</b> to process security parameters including gaze offsets, liveness calculations, and phone visibility.
+                  By joining, you agree that camera frames may be processed for supported monitoring observations. Liveness checks and combined integrity scores may be unavailable. Automated flags require human review and are not proof of misconduct.
                 </p>
               </div>
             </div>

@@ -2,14 +2,11 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { 
   ShieldAlert, 
-  Video, 
   Smartphone, 
   Cpu, 
   Activity, 
   ChevronRight, 
   Fingerprint, 
-  FileCheck2,
-  Users
 } from 'lucide-react';
 
 const Landing = () => {

@@ -4,9 +4,10 @@ from sqlalchemy.orm import Session
 from datetime import timedelta
 
 from app.core.database import get_db
-from app.core.security import get_password_hash, verify_password, create_access_token
+from app.core.security import get_password_hash, verify_password, create_access_token, decode_access_token
 from app.models.user import User
 from app.schemas.auth import UserCreate, UserLogin, UserOut, Token, ForgotPasswordRequest, ResetPasswordRequest
+from app.services.email import send_password_reset_email
 
 router = APIRouter()
 
@@ -71,24 +72,18 @@ def login_oauth(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
 
 @router.post("/forgot-password", status_code=status.HTTP_200_OK)
 def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
-    """
-    Initiates password recovery.
-    In a real app, this sends a reset link via email.
-    We return a success message and log the token.
-    """
+    """Send a reset-only token when SMTP is configured, without revealing account existence."""
     user = db.query(User).filter(User.email == req.email).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Email address not found.")
-        
-    # Generate mock reset token (using standard JWT)
-    reset_token = create_access_token(subject=user.email, expires_delta=timedelta(hours=1))
-    print(f"\n--- PASSWORD RESET REQUEST ---")
-    print(f"To: {user.email}")
-    print(f"Token: {reset_token}")
-    print(f"Link: http://localhost:5173/reset-password?token={reset_token}")
-    print(f"-------------------------------\n")
-    
-    return {"message": "Password reset email sent."}
+    if user:
+        reset_token = create_access_token(
+            subject=user.email,
+            expires_delta=timedelta(hours=1),
+            token_use="password_reset",
+        )
+        send_password_reset_email(user.email, reset_token)
+    return {
+        "message": "If the address matches an account and recovery email is configured, instructions will be sent."
+    }
 
 
 @router.post("/reset-password", status_code=status.HTTP_200_OK)
@@ -96,8 +91,7 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
     """
     Resets the user password with a valid reset token.
     """
-    from app.core.security import decode_access_token
-    email = decode_access_token(req.token)
+    email = decode_access_token(req.token, expected_use="password_reset")
     if not email:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
         

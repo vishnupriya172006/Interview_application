@@ -9,6 +9,43 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(o
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+# Load deepfake detector helper from training pipeline
+DeepfakeDetector = None
+try:
+    from training.inference import DeepfakeDetector
+    print("[MODELS] DeepfakeDetector imported successfully from training.inference")
+except ImportError as e:
+    print(f"[MODELS] WARNING: Could not import DeepfakeDetector from training.inference: {e}")
+    # Attempt alternative import path
+    try:
+        from inference import DeepfakeDetector
+        print("[MODELS] DeepfakeDetector imported from direct inference module")
+    except ImportError as e2:
+        print(f"[MODELS] WARNING: Could not import DeepfakeDetector from any source: {e2}")
+        DeepfakeDetector = None
+
+# Import MediaPipe & YOLO with better error handling
+mp_face_mesh = None
+mediapipe_available = False
+
+try:
+    import mediapipe as mp
+    mp_face_mesh = mp.solutions.face_mesh.FaceMesh
+    mediapipe_available = True
+
+except ImportError as e1:
+    print("[AI ENGINE] WARN: MediaPipe not installed or import failed")
+    print(f"[AI ENGINE]   Install with: pip install mediapipe>=0.10.11")
+    mp_face_mesh = None
+    mediapipe_available = False
+
+YOLO = None
+try:
+    from ultralytics import YOLO
+    print("[MODELS] OK: YOLO (ultralytics) imported successfully")
+except ImportError as e:
+    print("[MODELS] WARN: YOLO library not installed; phone detection is unavailable")
+
 
 class AIEngine:
     """
@@ -18,68 +55,56 @@ class AIEngine:
     - MediaPipe Gaze, Liveness (Smile/Blink/Head-pos) Estimation
     """
     def __init__(self):
-        self.deepfake_detector = None
-        self.yolo_model = None
-        self.face_mesh = None
-
-        # 1. Initialize Deepfake Detector lazily
-        self._initialize_deepfake_detector()
-
-        # 2. Initialize YOLOv8 Phone Detector lazily
-        self._initialize_yolo()
-
-        # 3. Initialize MediaPipe Face Mesh lazily
-        self._initialize_mediapipe()
-
-    def _initialize_deepfake_detector(self):
-        try:
-            from training.inference import DeepfakeDetector
-            if os.path.exists(settings.DEEPFAKE_MODEL_PATH):
-                self.deepfake_detector = DeepfakeDetector(settings.DEEPFAKE_MODEL_PATH)
-                print("[AI ENGINE] ✓ Deepfake Detector initialized successfully.")
-            else:
-                print(f"[AI ENGINE] WARNING: trained deepfake model not found at {settings.DEEPFAKE_MODEL_PATH}; deepfake detection is disabled.")
+        # 1. Initialize Deepfake Detector
+        if DeepfakeDetector is not None:
+            try:
+                if os.path.exists(settings.DEEPFAKE_MODEL_PATH):
+                    self.deepfake_detector = DeepfakeDetector(settings.DEEPFAKE_MODEL_PATH)
+                    print("[AI ENGINE] OK: Deepfake Detector initialized successfully.")
+                else:
+                    print(f"[AI ENGINE] WARNING: Deepfake model file not found at {settings.DEEPFAKE_MODEL_PATH}")
+                    self.deepfake_detector = None
+            except Exception as e:
+                print(f"[AI ENGINE] ERROR: Failed to initialize Deepfake Detector: {e}")
                 self.deepfake_detector = None
-        except ImportError as e:
-            print(f"[AI ENGINE] WARNING: Could not import DeepfakeDetector: {e}")
-            self.deepfake_detector = None
-        except Exception as e:
-            print(f"[AI ENGINE] ERROR: Failed to initialize Deepfake Detector: {e}")
+        else:
+            print("[AI ENGINE] WARNING: Deepfake Detector class not available. Deepfake detection will be disabled.")
             self.deepfake_detector = None
 
-    def _initialize_yolo(self):
-        try:
-            from ultralytics import YOLO
-            if not os.path.exists(settings.YOLO_MODEL_PATH):
-                print(f"[AI ENGINE] WARNING: YOLO weights not found at {settings.YOLO_MODEL_PATH}; phone detection is disabled.")
-                return
-            self.yolo_model = YOLO(settings.YOLO_MODEL_PATH)
-            print("[AI ENGINE] ✓ YOLOv8 Phone Detector initialized successfully.")
-        except ImportError:
-            print("[AI ENGINE] WARNING: YOLO library not installed. Phone detection will be disabled.")
-            self.yolo_model = None
-        except Exception as e:
-            print(f"[AI ENGINE] ERROR: Failed to initialize YOLOv8: {e}")
+        # 2. Initialize YOLOv8 (Loads yolov8n.pt nano model)
+        if YOLO is not None:
+            try:
+                if not os.path.isfile(settings.YOLO_MODEL_PATH):
+                    raise FileNotFoundError("Configured YOLO weights are not present")
+                self.yolo_model = YOLO(settings.YOLO_MODEL_PATH)
+                print("[AI ENGINE] OK: YOLOv8 Phone Detector initialized successfully.")
+            except Exception as e:
+                print(f"[AI ENGINE] ERROR: Failed to initialize YOLOv8: {e}")
+                self.yolo_model = None
+        else:
+            print("[AI ENGINE] WARNING: YOLOv8 library not available. Phone detection will be disabled.")
             self.yolo_model = None
 
-    def _initialize_mediapipe(self):
-        try:
-            import mediapipe as mp
-            # The legacy FaceMesh API supplies the process() method used below
-            # and downloads no external task file at runtime.
-            self.face_mesh = mp.solutions.face_mesh.FaceMesh(
-                static_image_mode=False,
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5,
-            )
-            print("[AI ENGINE] ✓ MediaPipe Face Mesh initialized successfully.")
-        except ImportError:
-            print("[AI ENGINE] WARNING: MediaPipe not installed. Gaze and liveness detection will be disabled.")
-            self.face_mesh = None
-        except Exception as e:
-            print(f"[AI ENGINE] ERROR: Failed to initialize MediaPipe Face Mesh: {e}")
+        # 3. Initialize MediaPipe Face Mesh for eye/iris tracking
+        if mediapipe_available and mp_face_mesh is not None:
+            try:
+                self.face_mesh = mp_face_mesh(
+                    max_num_faces=1,
+                    refine_landmarks=True,  # Enables iris detection (468-477)
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.5
+                )
+                print("[AI ENGINE] OK: MediaPipe Face Mesh initialized successfully.")
+            except Exception as e:
+                print(f"[AI ENGINE] ERROR: Failed to initialize MediaPipe Face Mesh: {e}")
+                import traceback
+                traceback.print_exc()
+                self.face_mesh = None
+        else:
+            if not mediapipe_available:
+                print("[AI ENGINE] WARNING: MediaPipe library not available. Gaze and liveness detection will be disabled.")
+            else:
+                print("[AI ENGINE] WARNING: MediaPipe Face Mesh module not accessible. Gaze and liveness detection will be disabled.")
             self.face_mesh = None
 
     def process_frame(self, frame_bgr, interview_id=None, db_session=None):
@@ -90,13 +115,17 @@ class AIEngine:
         """
         # Default results
         metrics = {
-            "deepfake_score": 0.0,
-            "liveness_status": True,
-            "gaze_direction": "center",
-            "looking_away": False,
-            "phone_detected": False,
+            "deepfake_score": None,
+            "deepfake_status": "unavailable" if self.deepfake_detector is None else "pending",
+            "liveness_status": None,
+            "liveness_analysis_status": "unavailable",
+            "gaze_direction": None,
+            "gaze_analysis_status": "unavailable" if self.face_mesh is None else "pending",
+            "looking_away": None,
+            "phone_detected": None,
+            "phone_analysis_status": "unavailable" if self.yolo_model is None else "pending",
             "phone_count": 0,
-            "integrity_score": 100.0,
+            "integrity_score": None,
             "bbox": None
         }
 
@@ -114,13 +143,16 @@ class AIEngine:
                         xyxy = box.xyxy[0].tolist()
                         phone_boxes.append(xyxy)
                         phone_conf = max(phone_conf, conf)
+                metrics["phone_detected"] = bool(phone_boxes)
                 
                 if len(phone_boxes) > 0:
                     metrics["phone_detected"] = True
                     metrics["phone_count"] = len(phone_boxes)
                     # Use first phone bounding box for display
                     metrics["bbox"] = [int(x) for x in phone_boxes[0]]
+                metrics["phone_analysis_status"] = "analyzed"
             except Exception as e:
+                metrics["phone_analysis_status"] = "failed"
                 print(f"YOLO Processing error: {e}")
 
         # 2. Run PyTorch Deepfake detection
@@ -129,20 +161,21 @@ class AIEngine:
         if self.deepfake_detector is not None:
             try:
                 deepfake_score, bbox = self.deepfake_detector.detect_face_and_predict(frame_bgr)
-                metrics["deepfake_score"] = float(deepfake_score)
-                if bbox:
+                if bbox is None:
+                    # The detector returns zero when it cannot locate a face;
+                    # that is missing evidence, not a real-face prediction.
+                    metrics["deepfake_status"] = "uncertain"
+                else:
+                    metrics["deepfake_score"] = float(deepfake_score)
+                    metrics["deepfake_status"] = "analyzed"
                     face_bbox = bbox
                     if not metrics["bbox"]:  # Prefer phone bounding box, fallback to face
                         metrics["bbox"] = face_bbox
             except Exception as e:
+                metrics["deepfake_status"] = "failed"
                 print(f"Deepfake Classifier error: {e}")
 
         # 3. Run MediaPipe Face Mesh / Gaze / Liveness
-        blink_rate = 0.0
-        head_movement = 0.0
-        smile_score = 0.0
-        is_live = True
-        
         if self.face_mesh is not None:
             try:
                 # Convert BGR to RGB
@@ -153,43 +186,9 @@ class AIEngine:
                 if results.multi_face_landmarks:
                     face_landmarks = results.multi_face_landmarks[0].landmark
                     
-                    # Blink Detection - Eye Aspect Ratio (EAR)
-                    # Left Eye: top=159, bottom=145, left_corner=33, right_corner=133
-                    p159 = np.array([face_landmarks[159].x * w, face_landmarks[159].y * h])
-                    p145 = np.array([face_landmarks[145].x * w, face_landmarks[145].y * h])
+                    # Eye corners and iris are used only for a gaze observation.
                     p33 = np.array([face_landmarks[33].x * w, face_landmarks[33].y * h])
                     p133 = np.array([face_landmarks[133].x * w, face_landmarks[133].y * h])
-                    
-                    left_ear = np.linalg.norm(p159 - p145) / max(np.linalg.norm(p33 - p133), 1e-6)
-                    blink_rate = float(left_ear)
-                    
-                    if left_ear < 0.15:
-                        # Eye is closed (possible blink)
-                        pass
-                        
-                    # Smile Detection - Mouth Corner Distance / Ratio
-                    # Corners: 61, 291. Upper lip: 13, Lower lip: 14
-                    p61 = np.array([face_landmarks[61].x * w, face_landmarks[61].y * h])
-                    p291 = np.array([face_landmarks[291].x * w, face_landmarks[291].y * h])
-                    p13 = np.array([face_landmarks[13].x * w, face_landmarks[13].y * h])
-                    p14 = np.array([face_landmarks[14].x * w, face_landmarks[14].y * h])
-                    
-                    mouth_width = np.linalg.norm(p61 - p291)
-                    mouth_height = np.linalg.norm(p13 - p14)
-                    
-                    # Normalize by face width (e.g., distance between outer eye corners 130 and 359)
-                    p130 = np.array([face_landmarks[130].x * w, face_landmarks[130].y * h])
-                    p359 = np.array([face_landmarks[359].x * w, face_landmarks[359].y * h])
-                    face_width = np.linalg.norm(p130 - p359)
-                    
-                    smile_score = float(mouth_width / max(face_width, 1e-6))
-                    
-                    # Head Movement / Pose (Roll/Yaw/Pitch heuristics)
-                    # Nose tip: 1, Chin: 152, Left eye: 33, Right eye: 263
-                    pnose = np.array([face_landmarks[1].x, face_landmarks[1].y])
-                    pchin = np.array([face_landmarks[152].x, face_landmarks[152].y])
-                    head_vector = pnose - pchin
-                    head_movement = float(np.linalg.norm(head_vector))
                     
                     # Gaze Direction (Iris Tracking)
                     # Left Iris center landmark is 468, Left Eye corners: 33, 133
@@ -213,44 +212,34 @@ class AIEngine:
                             metrics["gaze_direction"] = "center"
                             metrics["looking_away"] = False
                             
-                    # Challenge response: if blink rate is extremely stable (like zero or flatlined), is_live could be False
-                    if left_ear > 0.5: # Out of bound EAR
-                        is_live = False
-                        
-                    metrics["liveness_status"] = is_live
+                    if len(face_landmarks) > 468:
+                        metrics["gaze_analysis_status"] = "analyzed"
+                    else:
+                        metrics["gaze_analysis_status"] = "uncertain"
+                else:
+                    metrics["gaze_analysis_status"] = "uncertain"
             except Exception as e:
+                metrics["gaze_analysis_status"] = "failed"
                 print(f"MediaPipe Face Mesh error: {e}")
                 
-        # Calculate instantaneous integrity score
-        penalty = 0.0
-        if metrics["phone_detected"]:
-            penalty += 30.0
-        if metrics["looking_away"]:
-            penalty += 15.0
-        if deepfake_score > 0.4:
-            penalty += (deepfake_score * 50)
-        if not metrics["liveness_status"]:
-            penalty += 20.0
-            
-        metrics["integrity_score"] = max(0.0, 100.0 - penalty)
-
         # 4. Save to PostgreSQL if DB Session is active
         if interview_id and db_session:
             try:
                 from app.models.logs import (
-                    DeepfakePrediction, EyeGazeLog, PhoneDetectionLog, LivenessLog, MonitoringEvent
+                    DeepfakePrediction, EyeGazeLog, PhoneDetectionLog, MonitoringEvent
                 )
                 
                 # Save Deepfake Log
-                df_log = DeepfakePrediction(
+                if metrics["deepfake_status"] == "analyzed":
+                    df_log = DeepfakePrediction(
                     interview_id=interview_id,
                     score=metrics["deepfake_score"],
-                    label="fake" if metrics["deepfake_score"] > 0.4 else "real"
-                )
-                db_session.add(df_log)
+                    label="fake" if metrics["deepfake_score"] > 0.4 else "real")
+                    db_session.add(df_log)
                 
                 # Save Eye Gaze Log
-                g_log = EyeGazeLog(
+                if metrics["gaze_analysis_status"] == "analyzed":
+                    g_log = EyeGazeLog(
                     interview_id=interview_id,
                     horizontal_gaze=0.0,
                     vertical_gaze=0.0,
@@ -258,47 +247,38 @@ class AIEngine:
                     looking_away=metrics["looking_away"],
                     attention_score=1.0 - (0.5 if metrics["looking_away"] else 0.0)
                 )
-                db_session.add(g_log)
+                    db_session.add(g_log)
                 
                 # Save Phone Detection Log
-                p_log = PhoneDetectionLog(
+                if metrics["phone_analysis_status"] == "analyzed":
+                    p_log = PhoneDetectionLog(
                     interview_id=interview_id,
                     phone_detected=metrics["phone_detected"],
                     confidence=phone_conf,
                     count=metrics["phone_count"]
                 )
-                db_session.add(p_log)
-                
-                # Save Liveness Log
-                l_log = LivenessLog(
-                    interview_id=interview_id,
-                    is_live=metrics["liveness_status"],
-                    blink_rate=blink_rate,
-                    head_movement_score=head_movement,
-                    smile_score=smile_score
-                )
-                db_session.add(l_log)
+                    db_session.add(p_log)
                 
                 # Generate high-severity events if needed
-                if metrics["phone_detected"]:
+                if metrics["phone_detected"] is True:
                     evt = MonitoringEvent(
                         interview_id=interview_id,
                         event_type="phone_detected",
                         severity="high",
-                        details="A mobile phone was detected in candidate view."
+                        details="The object detector flagged a cell phone in a sampled camera frame."
                     )
                     db_session.add(evt)
                     
-                if metrics["deepfake_score"] > 0.6:
+                if metrics["deepfake_score"] is not None and metrics["deepfake_score"] > 0.6:
                     evt = MonitoringEvent(
                         interview_id=interview_id,
                         event_type="deepfake_detected",
                         severity="high",
-                        details=f"High-probability deepfake detected (Score: {metrics['deepfake_score']:.2f})."
+                        details=f"Elevated uncalibrated deepfake model output in a sampled frame (score: {metrics['deepfake_score']:.2f})."
                     )
                     db_session.add(evt)
                     
-                if metrics["looking_away"]:
+                if metrics["looking_away"] is True:
                     evt = MonitoringEvent(
                         interview_id=interview_id,
                         event_type="gaze_deviation",

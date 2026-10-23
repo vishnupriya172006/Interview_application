@@ -14,7 +14,7 @@ def get_password_hash(password: str) -> str:
     """Generates a bcrypt hash for a plain text password."""
     return pwd_context.hash(password)
 
-def create_access_token(subject: Union[str, Any], expires_delta: timedelta = None) -> str:
+def create_access_token(subject: Union[str, Any], expires_delta: timedelta = None, token_use: str = "access") -> str:
     """
     Creates a JWT access token containing a subject (typically the user email or ID)
     and expiration timestamp.
@@ -24,17 +24,20 @@ def create_access_token(subject: Union[str, Any], expires_delta: timedelta = Non
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
-    to_encode = {"exp": expire, "sub": str(subject)}
+    to_encode = {"exp": expire, "sub": str(subject), "token_use": token_use}
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
-def decode_access_token(token: str) -> Union[str, None]:
+def decode_access_token(token: str, expected_use: str = "access") -> Union[str, None]:
     """
     Decodes and validates a JWT token.
     Returns the subject (user ID or email) if valid, or None.
     """
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        # Tokens issued before token_use was introduced remain access tokens.
+        if payload.get("token_use", "access") != expected_use:
+            return None
         return payload.get("sub")
     except Exception:
         return None

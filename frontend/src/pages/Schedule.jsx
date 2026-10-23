@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { api } from '../context/AuthContext';
 import RecruiterLayout from '../components/RecruiterLayout';
-import { CalendarPlus, Clipboard, CheckCircle2, ChevronRight, AlertCircle } from 'lucide-react';
+import { CalendarPlus, CheckCircle2, ChevronRight, AlertCircle } from 'lucide-react';
 
 const Schedule = () => {
   const [candidateName, setCandidateName] = useState('');

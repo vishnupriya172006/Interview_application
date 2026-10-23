@@ -9,7 +9,7 @@ class ReportOut(BaseModel):
     id: str
     interview_id: str
     pdf_path: str
-    integrity_score: float
+    integrity_score: Optional[float] = None
     risk_level: str
     generated_at: datetime
 

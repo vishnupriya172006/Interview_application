@@ -9,7 +9,6 @@ import {
   FileSpreadsheet, 
   ArrowUpRight, 
   Plus, 
-  AlertCircle,
   Clock,
   Video
 } from 'lucide-react';
@@ -43,7 +42,7 @@ const Dashboard = () => {
         setInterviews(interviewsRes.data);
         setReports(reportsRes.data);
       } catch (err) {
-        console.error('Error fetching dashboard statistics:', err);
+        console.error('Error fetching dashboard statistics.');
       } finally {
         setLoading(false);
       }
@@ -60,7 +59,7 @@ const Dashboard = () => {
   // Process data for charts
   // 1. Chart: Integrity Score Trend over time
   const chartData = interviews
-    .filter(i => i.status === 'completed' && i.integrity_score !== null)
+    .filter(i => i.status === 'completed' && i.integrity_score != null && i.risk_level !== 'review_required')
     .slice()
     .reverse() // chronological order
     .map(i => ({
@@ -69,16 +68,15 @@ const Dashboard = () => {
     }));
 
   // Fallback default chart data if no completed interviews exist
-  const trendData = chartData.length > 0 ? chartData : [
-    { name: 'Demo 1', score: 92 },
-    { name: 'Demo 2', score: 87 },
-    { name: 'Demo 3', score: 65 },
-    { name: 'Demo 4', score: 94 }
-  ];
+  const trendData = chartData;
+  const reviewRequiredCount = interviews.filter(
+    interview => interview.status === 'completed' &&
+      (interview.risk_level === 'review_required' || interview.integrity_score == null)
+  ).length;
 
   // 2. Chart: Risk levels pie chart
   const riskCounts = interviews.reduce((acc, curr) => {
-    if (curr.status === 'completed' && curr.risk_level) {
+    if (curr.status === 'completed' && curr.integrity_score != null && curr.risk_level && curr.risk_level !== 'review_required') {
       acc[curr.risk_level] = (acc[curr.risk_level] || 0) + 1;
     }
     return acc;
@@ -90,11 +88,7 @@ const Dashboard = () => {
     { name: 'High Risk', value: riskCounts['high'] || 0, color: '#EF4444' }
   ].filter(d => d.value > 0);
 
-  const finalPieData = pieData.length > 0 ? pieData : [
-    { name: 'Low Risk', value: 3, color: '#10B981' },
-    { name: 'Medium Risk', value: 1, color: '#F59E0B' },
-    { name: 'High Risk', value: 0, color: '#EF4444' }
-  ];
+  const finalPieData = pieData;
 
   return (
     <RecruiterLayout>
@@ -172,7 +166,7 @@ const Dashboard = () => {
             <div className="glass p-6 rounded-xl border border-dark-800 lg:col-span-2 space-y-6">
               <div>
                 <h3 className="text-lg font-bold">Integrity Scores Trend</h3>
-                <p className="text-xs text-dark-300">Average integrity marks across consecutive sessions.</p>
+                <p className="text-xs text-dark-300">Scores from completed interviews with complete stored evidence.</p>
               </div>
               <div className="h-[280px]">
                 <ResponsiveContainer width="100%" height="100%">
@@ -200,8 +194,13 @@ const Dashboard = () => {
             <div className="glass p-6 rounded-xl border border-dark-800 space-y-6 flex flex-col justify-between">
               <div>
                 <h3 className="text-lg font-bold">Risk Matrix Distribution</h3>
-                <p className="text-xs text-dark-300">Ratio of Low vs High risk candidate validations.</p>
+                <p className="text-xs text-dark-300">Distribution of scored completed interviews.</p>
               </div>
+              {reviewRequiredCount > 0 && (
+                <p className="text-xs text-amber-300">
+                  {reviewRequiredCount} completed {reviewRequiredCount === 1 ? 'interview requires' : 'interviews require'} human review; combined scores are unavailable.
+                </p>
+              )}
               <div className="h-[220px] flex items-center justify-center">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>

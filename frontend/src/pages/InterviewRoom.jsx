@@ -9,21 +9,17 @@ import {
   VideoOff, 
   PhoneOff, 
   ShieldAlert, 
-  MonitorUp, 
-  AlertTriangle,
   Eye,
   Smartphone,
   Cpu,
-  RefreshCcw,
   Sparkles
 } from 'lucide-react';
-import { LineChart, Line, ResponsiveContainer, YAxis, CartesianGrid } from 'recharts';
 
 const InterviewRoom = () => {
   const { roomId } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { socket, connected, connectSocket, disconnectSocket } = useSocket();
+  const { socket, connected } = useSocket();
 
   // Role: If logged in, they are recruiter. If not, they are candidate.
   const isRecruiter = !!user;
@@ -34,36 +30,53 @@ const InterviewRoom = () => {
   const localStreamRef = useRef(null);
   const canvasRef = useRef(document.createElement('canvas'));
   const peerConnectionRef = useRef(null);
+  const remotePeerSidRef = useRef(null);
+  const pendingIceCandidatesRef = useRef([]);
+  const offerInProgressRef = useRef(false);
+  const restartOfferRef = useRef(null);
   const frameIntervalRef = useRef(null);
 
   // Call configuration state
   const [micMuted, setMicMuted] = useState(false);
   const [videoOff, setVideoOff] = useState(false);
-  const [screenSharing, setScreenSharing] = useState(false);
+  const [mediaConnectionState, setMediaConnectionState] = useState('new');
 
   // Live Integrity Telemetry State (For Recruiter Monitor)
-  const [integrityScore, setIntegrityScore] = useState(100.0);
-  const [deepfakeScore, setDeepfakeScore] = useState(0.0);
-  const [livenessStatus, setLivenessStatus] = useState(true);
-  const [gazeDirection, setGazeDirection] = useState('center');
-  const [lookingAway, setLookingAway] = useState(false);
-  const [phoneDetected, setPhoneDetected] = useState(false);
+  const [integrityScore, setIntegrityScore] = useState(null);
+  const [deepfakeScore, setDeepfakeScore] = useState(null);
+  const [deepfakeAnalysisStatus, setDeepfakeAnalysisStatus] = useState('unavailable');
+  const [livenessStatus, setLivenessStatus] = useState(null);
+  const [livenessAnalysisStatus, setLivenessAnalysisStatus] = useState('unavailable');
+  const [gazeAnalysisStatus, setGazeAnalysisStatus] = useState('unavailable');
+  const [gazeDirection, setGazeDirection] = useState(null);
+  const [lookingAway, setLookingAway] = useState(null);
+  const [phoneAnalysisStatus, setPhoneAnalysisStatus] = useState('unavailable');
+  const [phoneDetected, setPhoneDetected] = useState(null);
   const [phoneCount, setPhoneCount] = useState(0);
   const [bbox, setBbox] = useState(null); // [x, y, w, h] of face or phone
   
   // Real-time timeline alerts
   const [alerts, setAlerts] = useState([]);
   // Real-time integrity score logs for chart feed
-  const [scoreHistory, setScoreHistory] = useState([{ time: '0s', score: 100 }]);
 
   // WebRTC ICE Configuration
   const rtcConfig = {
-    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      ...(import.meta.env.VITE_TURN_URL
+        ? [{
+            urls: import.meta.env.VITE_TURN_URL.split(',').map(url => url.trim()).filter(Boolean),
+            username: import.meta.env.VITE_TURN_USERNAME,
+            credential: import.meta.env.VITE_TURN_CREDENTIAL
+          }]
+        : [])
+    ]
   };
 
-  // 1. Initialize Socket.IO connection & Join Room
+  // 1. Connect Socket.IO once its provider has created the socket.
   useEffect(() => {
-    connectSocket();
+    if (!socket) return;
+    if (!socket.connected) socket.connect();
     
     return () => {
       // Clean up intervals and streams
@@ -72,73 +85,171 @@ const InterviewRoom = () => {
         localStreamRef.current.getTracks().forEach(track => track.stop());
       }
       if (peerConnectionRef.current) peerConnectionRef.current.close();
-      disconnectSocket();
+      socket.disconnect();
     };
-  }, []);
+  }, [socket]);
 
   // 2. Setup audio/video permissions and WebRTC signaling hooks
   useEffect(() => {
     if (!socket) return;
+    const remoteVideoElement = remoteVideoRef.current;
+    let disposed = false;
+    let roomJoined = false;
+
+    const applyPendingIceCandidates = async (pc, peerSid) => {
+      const pending = pendingIceCandidatesRef.current;
+      const candidatesForPeer = pending.filter(({ sender }) => sender === peerSid);
+      pendingIceCandidatesRef.current = pending.filter(({ sender }) => sender !== peerSid);
+      for (const { candidate } of candidatesForPeer) {
+        try {
+          await pc.addIceCandidate(candidate);
+        } catch (err) {
+          console.error('Unable to apply a buffered ICE candidate.');
+        }
+      }
+    };
+
+    const joinRoom = () => {
+      if (!disposed && !roomJoined && localStreamRef.current) {
+        socket.emit('join_room', { room: roomId, role: isRecruiter ? 'recruiter' : 'candidate' });
+        roomJoined = true;
+      }
+    };
+
+    const sendRecruiterOffer = async (sid, forceRestart = false) => {
+      if (!isRecruiter || offerInProgressRef.current) return;
+      const existingPeerConnection = peerConnectionRef.current;
+      if (!forceRestart &&
+        existingPeerConnection &&
+        remotePeerSidRef.current === sid &&
+        existingPeerConnection.signalingState !== 'closed' &&
+        existingPeerConnection.connectionState !== 'failed'
+      ) {
+        return;
+      }
+
+      offerInProgressRef.current = true;
+      try {
+        const pc = createPeerConnection(sid);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('rtc_offer', { room: roomId, sdp: pc.localDescription });
+      } catch (err) {
+        console.error('Unable to create the interview offer.');
+      } finally {
+        offerInProgressRef.current = false;
+      }
+    };
+    restartOfferRef.current = (sid) => sendRecruiterOffer(sid, true);
+
+    const handleDisconnect = () => {
+      roomJoined = false;
+      if (peerConnectionRef.current) peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+      remotePeerSidRef.current = null;
+      pendingIceCandidatesRef.current = [];
+      offerInProgressRef.current = false;
+      setMediaConnectionState('new');
+      if (remoteVideoElement) remoteVideoElement.srcObject = null;
+    };
+
+    const handlePeerLeft = ({ sid }) => {
+      if (sid !== remotePeerSidRef.current) return;
+      if (peerConnectionRef.current) peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+      remotePeerSidRef.current = null;
+      pendingIceCandidatesRef.current = [];
+      offerInProgressRef.current = false;
+      setMediaConnectionState('new');
+      if (remoteVideoElement) remoteVideoElement.srcObject = null;
+    };
 
     const startSession = async () => {
       try {
         // Request webcam access
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        if (disposed) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
         localStreamRef.current = stream;
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
         }
 
-        // Join Socket.IO room
-        socket.emit('join_room', { room: roomId, role: isRecruiter ? 'recruiter' : 'candidate' });
-
         // Trigger continuous canvas frame capture if Candidate
         if (!isRecruiter) {
           startFrameCapture();
         }
+        joinRoom();
       } catch (err) {
-        console.error('Lobby media capture failure:', err);
+        console.error('Lobby camera or microphone access failed.');
       }
     };
 
-    startSession();
+    socket.on('connect', joinRoom);
 
     // Listen for peer join alerts to initiate WebRTC Peer Connection
-    socket.on('user_joined', async ({ sid, role }) => {
+    socket.on('user_joined', ({ sid, role }) => {
       console.log(`Peer joined: ${sid} with role ${role}`);
-      if (isRecruiter) {
-        // Recruiter initiates offer
-        await createPeerConnection(sid);
-        const offer = await peerConnectionRef.current.createOffer();
-        await peerConnectionRef.current.setLocalDescription(offer);
-        socket.emit('rtc_offer', { room: roomId, sdp: offer });
-      }
+      if (role === 'candidate') sendRecruiterOffer(sid);
+    });
+
+    socket.on('room_peers', (peers) => {
+      const candidate = peers.find(peer => peer.role === 'candidate');
+      if (candidate) sendRecruiterOffer(candidate.sid);
+    });
+
+    socket.on('rtc_ice_restart', ({ sender }) => {
+      if (isRecruiter) sendRecruiterOffer(sender, true);
     });
 
     // WebRTC Signaling listeners
     socket.on('rtc_offer', async ({ sdp, sender }) => {
       if (!isRecruiter) {
         // Candidate receives offer and answers
-        await createPeerConnection(sender);
-        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(sdp));
-        const answer = await peerConnectionRef.current.createAnswer();
-        await peerConnectionRef.current.setLocalDescription(answer);
-        socket.emit('rtc_answer', { room: roomId, sdp: answer });
+        try {
+          const pc = createPeerConnection(sender);
+          await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+          await applyPendingIceCandidates(pc, sender);
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          socket.emit('rtc_answer', { room: roomId, sdp: pc.localDescription });
+        } catch (err) {
+          console.error('Unable to answer the interview offer.');
+        }
       }
     });
 
     socket.on('rtc_answer', async ({ sdp }) => {
       if (peerConnectionRef.current) {
-        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(sdp));
+        try {
+          const pc = peerConnectionRef.current;
+          await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+          await applyPendingIceCandidates(pc, remotePeerSidRef.current);
+        } catch (err) {
+          console.error('Unable to apply the interview answer.');
+        }
       }
     });
 
-    socket.on('rtc_ice_candidate', async ({ candidate }) => {
-      if (peerConnectionRef.current && candidate) {
+    socket.on('rtc_ice_candidate', async ({ candidate, sender }) => {
+      if (candidate && sender) {
+        const iceCandidate = new RTCIceCandidate(candidate);
+        const pc = peerConnectionRef.current;
+        if (!pc || !remotePeerSidRef.current) {
+          pendingIceCandidatesRef.current.push({ sender, candidate: iceCandidate });
+          return;
+        }
+        if (sender !== remotePeerSidRef.current) return;
+        if (!pc.remoteDescription) {
+          pendingIceCandidatesRef.current.push({ sender, candidate: iceCandidate });
+          return;
+        }
         try {
-          await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (e) {
-          console.error('Error adding ICE candidate:', e);
+          await pc.addIceCandidate(iceCandidate);
+        } catch (err) {
+          console.error('Unable to add a remote ICE candidate.');
         }
       }
     });
@@ -148,49 +259,95 @@ const InterviewRoom = () => {
       if (isRecruiter) {
         setIntegrityScore(data.integrity_score);
         setDeepfakeScore(data.deepfake_score);
+        setDeepfakeAnalysisStatus(data.deepfake_status);
         setLivenessStatus(data.liveness_status);
+        setLivenessAnalysisStatus(data.liveness_analysis_status);
+        setGazeAnalysisStatus(data.gaze_analysis_status);
         setGazeDirection(data.gaze_direction);
         setLookingAway(data.looking_away);
         setPhoneDetected(data.phone_detected);
+        setPhoneAnalysisStatus(data.phone_analysis_status);
         setPhoneCount(data.phone_count);
         setBbox(data.bbox);
         
-        // Feed chart
-        setScoreHistory(prev => {
-          const nextIdx = prev.length;
-          const newArr = [...prev, { time: `${nextIdx}s`, score: data.integrity_score }];
-          return newArr.slice(-20); // Keep last 20 frames
-        });
-
         // Parse alerts if anomaly occurs
         if (data.phone_detected) {
           addAlert('Phone Detected', 'high', 'Smartphone visible in camera frame.');
         }
-        if (data.deepfake_score > 0.6) {
-          addAlert('Deepfake Spoof Alert', 'high', `Deepfake neural confidence: ${data.deepfake_score * 100}%`);
+        if (data.deepfake_score !== null && data.deepfake_score > 0.6) {
+          addAlert('Deepfake model score elevated', 'high', `Uncalibrated model output: ${(data.deepfake_score * 100).toFixed(1)}%. Requires human review.`);
         }
         if (data.looking_away) {
           addAlert('Gaze Deviation', 'medium', `Eye gaze offset: ${data.gaze_direction}`);
         }
-        if (!data.liveness_status) {
+        if (data.liveness_status === false) {
           addAlert('Liveness Verification Anomaly', 'high', 'Failed pattern challenge responses.');
         }
       }
     });
 
+    socket.on('disconnect', handleDisconnect);
+    socket.on('user_left', handlePeerLeft);
+    startSession();
+    if (socket.connected) joinRoom();
+
     return () => {
+      disposed = true;
+      restartOfferRef.current = null;
+      if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
+      frameIntervalRef.current = null;
+      if (peerConnectionRef.current) peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+      remotePeerSidRef.current = null;
+      pendingIceCandidatesRef.current = [];
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => track.stop());
+        localStreamRef.current = null;
+      }
+      if (remoteVideoElement) remoteVideoElement.srcObject = null;
+      socket.off('connect', joinRoom);
+      socket.off('disconnect', handleDisconnect);
+      socket.off('user_left', handlePeerLeft);
       socket.off('user_joined');
+      socket.off('room_peers');
       socket.off('rtc_offer');
       socket.off('rtc_answer');
       socket.off('rtc_ice_candidate');
+      socket.off('rtc_ice_restart');
       socket.off('metrics_update');
     };
-  }, [socket]);
+  // The handlers below close over helpers for this socket and room lifecycle.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket, roomId, isRecruiter]);
 
   // 3. WebRTC Peer Connection builder
-  const createPeerConnection = async (peerSid) => {
+  const createPeerConnection = (peerSid) => {
+    if (peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed') {
+      peerConnectionRef.current.close();
+    }
     const pc = new RTCPeerConnection(rtcConfig);
     peerConnectionRef.current = pc;
+    remotePeerSidRef.current = peerSid;
+    setMediaConnectionState(pc.connectionState);
+
+    pc.onconnectionstatechange = () => {
+      setMediaConnectionState(pc.connectionState);
+      console.info('WebRTC connection state:', pc.connectionState);
+    };
+    pc.oniceconnectionstatechange = () => {
+      console.info('WebRTC ICE state:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'failed') {
+        console.error('WebRTC ICE failed. Check TURN configuration and firewall reachability.');
+        if (isRecruiter && remotePeerSidRef.current) {
+          restartOfferRef.current?.(remotePeerSidRef.current);
+        } else {
+          socket?.emit('rtc_ice_restart', { room: roomId });
+        }
+      }
+    };
+    pc.onicecandidateerror = (event) => {
+      console.warn('WebRTC ICE candidate gathering error:', event.errorCode);
+    };
 
     // Attach local media tracks
     if (localStreamRef.current) {
@@ -211,8 +368,12 @@ const InterviewRoom = () => {
       console.log('Remote track received');
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = event.streams[0];
+        remoteVideoRef.current.play().catch(() => {
+          console.error('Unable to autoplay the remote interview feed.');
+        });
       }
     };
+    return pc;
   };
 
   // 4. Candidate canvas frame extraction (Emitted at 5 FPS)
@@ -270,9 +431,9 @@ const InterviewRoom = () => {
   const handleEndInterview = async () => {
     try {
       // Tell backend to calculate final score and generate PDF report
-      await api.post(`/interviews/end/${roomId}`);
+      await api.post(`/interviews/end/${roomId}`, null, isRecruiter ? {} : { headers: { 'X-Meeting-Code': roomId } });
     } catch (err) {
-      console.error('Error finalising interview:', err);
+      console.error('Error finalising the interview.');
     }
     
     // Stop local video tracks
@@ -297,7 +458,11 @@ const InterviewRoom = () => {
         <div className="flex items-center gap-3">
           <span className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`}></span>
           <span className="text-xs font-semibold text-dark-300">
-            {connected ? 'Streaming Active' : 'Disconnected'}
+            Signaling {connected ? 'Connected' : 'Disconnected'}
+          </span>
+          <span className={`h-2.5 w-2.5 rounded-full ${mediaConnectionState === 'connected' ? 'bg-emerald-500' : mediaConnectionState === 'failed' ? 'bg-rose-500' : 'bg-amber-400'}`}></span>
+          <span className="text-xs font-semibold text-dark-300">
+            Media {mediaConnectionState === 'new' ? 'Waiting' : mediaConnectionState}
           </span>
         </div>
       </header>
@@ -306,26 +471,14 @@ const InterviewRoom = () => {
       <div className="flex-1 flex flex-col lg:flex-row gap-4 min-h-0 overflow-hidden">
         {/* Videos block */}
         <div className="flex-1 flex flex-col md:flex-row gap-4 min-h-0 min-w-0">
-          {/* Main Candidate Feed */}
+          {/* Main remote participant feed */}
           <div className="flex-1 rounded-2xl border border-dark-800 bg-dark-900 relative overflow-hidden flex items-center justify-center">
-            {isRecruiter ? (
-              // Recruiter sees Candidate video in remote element
-              <video 
-                ref={remoteVideoRef} 
-                autoPlay 
-                playsInline 
-                className="w-full h-full object-cover scale-x-[-1]"
-              />
-            ) : (
-              // Candidate sees themselves in local video element
-              <video 
-                ref={localVideoRef} 
-                autoPlay 
-                playsInline 
-                muted 
-                className="w-full h-full object-cover scale-x-[-1]"
-              />
-            )}
+            <video
+              ref={remoteVideoRef}
+              autoPlay
+              playsInline
+              className="w-full h-full object-cover scale-x-[-1]"
+            />
             
             {/* Draw Overlay Bounding Box (Recruiter Side Only) */}
             {isRecruiter && bbox && (
@@ -349,32 +502,21 @@ const InterviewRoom = () => {
 
             <div className="absolute bottom-4 left-4 bg-dark-950/80 px-3 py-1.5 rounded-lg border border-dark-800 text-xs font-bold flex items-center gap-2">
               <span className="h-1.5 w-1.5 bg-brand-500 rounded-full animate-ping"></span>
-              {isRecruiter ? 'Candidate Feed' : 'My Camera'}
+              {isRecruiter ? 'Candidate Feed' : 'Recruiter Feed'}
             </div>
           </div>
 
           {/* Self Preview Feed (Small side box) */}
           <div className="w-full md:w-60 h-44 md:h-auto md:aspect-[3/4] shrink-0 rounded-2xl border border-dark-800 bg-dark-900 overflow-hidden relative flex items-center justify-center">
-            {isRecruiter ? (
-              // Recruiter self preview in local Video element
-              <video 
-                ref={localVideoRef} 
-                autoPlay 
-                playsInline 
-                muted 
-                className="w-full h-full object-cover scale-x-[-1]"
-              />
-            ) : (
-              // Candidate remote feed (Recruiter)
-              <video 
-                ref={remoteVideoRef} 
-                autoPlay 
-                playsInline 
-                className="w-full h-full object-cover scale-x-[-1]"
-              />
-            )}
+            <video
+              ref={localVideoRef}
+              autoPlay
+              playsInline
+              muted
+              className="w-full h-full object-cover scale-x-[-1]"
+            />
             <div className="absolute bottom-4 left-4 bg-dark-950/80 px-3 py-1.5 rounded-lg border border-dark-800 text-xs font-bold">
-              {isRecruiter ? 'My Preview' : 'Recruiter Feed'}
+              My Preview
             </div>
           </div>
         </div>
@@ -395,18 +537,18 @@ const InterviewRoom = () => {
                     className="fill-none transition-all duration-300" 
                     strokeWidth="6" 
                     strokeDasharray={2 * Math.PI * 34}
-                    strokeDashoffset={2 * Math.PI * 34 * (1 - integrityScore / 100)}
-                    stroke={integrityScore >= 85 ? '#10B981' : (integrityScore >= 60 ? '#F59E0B' : '#EF4444')}
+                    strokeDashoffset={2 * Math.PI * 34 * (1 - (integrityScore ?? 0) / 100)}
+                    stroke={integrityScore == null ? '#6B7280' : (integrityScore >= 85 ? '#10B981' : (integrityScore >= 60 ? '#F59E0B' : '#EF4444'))}
                   />
                 </svg>
-                <span className="text-lg font-extrabold">{integrityScore.toFixed(0)}</span>
+                <span className="text-lg font-extrabold">{integrityScore == null ? '—' : integrityScore.toFixed(0)}</span>
               </div>
               <div className="space-y-1">
                 <p className="text-xs font-semibold text-dark-300 uppercase tracking-wider">Integrity score index</p>
                 <h4 className="text-lg font-bold">
-                  {integrityScore >= 85 ? 'Low Risk Factor' : (integrityScore >= 60 ? 'Medium Risk Alert' : 'High Risk Level')}
+                  {integrityScore == null ? 'Analysis unavailable' : (integrityScore >= 85 ? 'Low Risk Factor' : (integrityScore >= 60 ? 'Medium Risk Alert' : 'High Risk Level'))}
                 </h4>
-                <p className="text-xs text-dark-300">Decreases if eye deviation or phone is visible.</p>
+                <p className="text-xs text-dark-300">Automated flags are observations for human review, not proof of misconduct.</p>
               </div>
             </div>
 
@@ -417,13 +559,13 @@ const InterviewRoom = () => {
               {/* Deepfake */}
               <div className="space-y-1.5">
                 <div className="flex justify-between text-xs">
-                  <span className="flex items-center gap-1"><Cpu className="h-3.5 w-3.5" /> Deepfake Predictor</span>
-                  <span className="font-mono">{deepfakeScore.toFixed(2)}</span>
+                  <span className="flex items-center gap-1"><Cpu className="h-3.5 w-3.5" /> Deepfake model score</span>
+                  <span className="font-mono">{deepfakeScore == null ? deepfakeAnalysisStatus : deepfakeScore.toFixed(2)}</span>
                 </div>
                 <div className="h-2 w-full bg-dark-800 rounded-full overflow-hidden">
                   <div 
                     className="h-full bg-indigo-500 transition-all duration-200" 
-                    style={{ width: `${deepfakeScore * 100}%` }}
+                    style={{ width: `${(deepfakeScore ?? 0) * 100}%` }}
                   />
                 </div>
               </div>
@@ -434,7 +576,7 @@ const InterviewRoom = () => {
                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
                   lookingAway ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                 }`}>
-                  {lookingAway ? `AWAY (${gazeDirection.toUpperCase()})` : 'CENTER'}
+                  {gazeAnalysisStatus !== 'analyzed' ? gazeAnalysisStatus : (lookingAway ? `AWAY (${gazeDirection?.toUpperCase()})` : 'CENTER')}
                 </span>
               </div>
 
@@ -442,9 +584,9 @@ const InterviewRoom = () => {
               <div className="flex items-center justify-between text-xs p-2 bg-dark-900/60 rounded-lg border border-dark-800">
                 <span className="flex items-center gap-1"><Smartphone className="h-3.5 w-3.5" /> Device visibility</span>
                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                  phoneDetected ? 'bg-rose-500/15 text-rose-400 border border-rose-500/20 animate-pulse' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                  phoneDetected ? 'bg-rose-500/15 text-rose-400 border border-rose-500/20 animate-pulse' : phoneAnalysisStatus === 'analyzed' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
                 }`}>
-                  {phoneDetected ? `${phoneCount} PHONE(S) DETECTED` : 'CLEAN'}
+                  {phoneDetected ? `${phoneCount} PHONE(S) DETECTED` : phoneAnalysisStatus === 'analyzed' ? 'NO PHONE OBSERVED' : phoneAnalysisStatus}
                 </span>
               </div>
 
@@ -452,9 +594,9 @@ const InterviewRoom = () => {
               <div className="flex items-center justify-between text-xs p-2 bg-dark-900/60 rounded-lg border border-dark-800">
                 <span className="flex items-center gap-1"><Sparkles className="h-3.5 w-3.5" /> Liveness status</span>
                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                  livenessStatus ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                  livenessStatus === true ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : livenessStatus === false ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
                 }`}>
-                  {livenessStatus ? 'PASSED' : 'ANOMALY'}
+                  {livenessStatus === true ? 'NO ANOMALY OBSERVED' : livenessStatus === false ? 'ANOMALY OBSERVED' : livenessAnalysisStatus}
                 </span>
               </div>
             </div>
@@ -508,7 +650,7 @@ const InterviewRoom = () => {
             <div className="p-4 rounded-xl bg-brand-500/5 border border-brand-500/15 flex items-center gap-3">
               <Sparkles className="h-6 w-6 text-brand-400 animate-spin" />
               <p className="text-[11px] text-dark-300 leading-normal">
-                AI verification checkpoints are logging metrics to compile your integrity score report.
+                Supported analyzers store observations when available. Missing evidence remains unavailable, and automated flags require human review.
               </p>
             </div>
           </div>

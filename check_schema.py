@@ -6,7 +6,7 @@ sys.path.insert(0, '.')
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 import psycopg2
-from app.core.config import settings
+from backend.app.core.config import settings
 
 try:
     conn_string = settings.DATABASE_URL

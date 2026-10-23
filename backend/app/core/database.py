@@ -1,10 +1,9 @@
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
+from app.core.config import settings
 import logging
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
-
-from app.core.config import settings
-
+# Set up logging
 logger = logging.getLogger(__name__)
 
 connect_args = {"check_same_thread": False} if settings.DATABASE_URL.startswith("sqlite") else {}
@@ -13,13 +12,13 @@ logger.info("Database engine configured for %s", engine.url.render_as_string(hid
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-
-class Base(DeclarativeBase):
-    """Base class for all SQLAlchemy ORM models."""
-
+Base = declarative_base()
 
 def get_db():
-    """Yield a database session and always close it after the request."""
+    """
+    FastAPI dependency that provides a database session.
+    Automatically closes the session after request finishes.
+    """
     db = SessionLocal()
     try:
         yield db

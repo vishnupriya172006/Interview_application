@@ -77,9 +77,9 @@ class DeepfakeDetector:
         pil_img = Image.fromarray(face_rgb_image)
         input_tensor = self.transform(pil_img).unsqueeze(0).to(self.device)
         
-        with torch.no_grad():
+        with self.torch.no_grad():
             outputs = self.model(input_tensor)
-            probs = torch.softmax(outputs, dim=1)
+            probs = self.torch.softmax(outputs, dim=1)
             fake_prob = probs[0, 1].item() # Class 1 is Fake
             
         return fake_prob

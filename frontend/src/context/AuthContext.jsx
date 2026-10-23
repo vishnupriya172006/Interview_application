@@ -3,9 +3,12 @@ import axios from 'axios';
 
 const AuthContext = createContext(null);
 
-export const API_URL = import.meta.env.VITE_API_URL || (
+const configuredApiUrl = import.meta.env.VITE_API_URL || (
   import.meta.env.DEV ? 'http://127.0.0.1:8000/api' : '/api'
 );
+export const API_URL = !import.meta.env.DEV && configuredApiUrl.startsWith('http://')
+  ? configuredApiUrl.replace(/^http:\/\//, 'https://')
+  : configuredApiUrl;
 
 // Pre-configure axios default headers
 export const api = axios.create({
@@ -47,7 +50,7 @@ export const AuthProvider = ({ children }) => {
           logout();
         }
       } catch (err) {
-        console.error('Failed to validate session token:', err);
+        console.error('Failed to validate the current session.');
         logout();
       } finally {
         setLoading(false);

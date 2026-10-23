@@ -12,6 +12,7 @@ import Schedule from './pages/Schedule';
 import MeetingCheck from './pages/MeetingCheck';
 import InterviewRoom from './pages/InterviewRoom';
 import Reports from './pages/Reports';
+import ResetPassword from './pages/ResetPassword';
 
 // Protected Route Component for Recruiters
 const ProtectedRoute = ({ children }) => {
@@ -41,6 +42,7 @@ function App() {
             {/* Public Routes */}
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="/meeting-check" element={<MeetingCheck />} />
             

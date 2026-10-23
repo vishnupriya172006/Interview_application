@@ -18,6 +18,6 @@ def ensure_deepfake_model() -> None:
             while chunk := response.read(1024 * 1024):
                 output.write(chunk)
         temporary_path.replace(model_path)
-    except Exception as error:
+    except Exception:
         temporary_path.unlink(missing_ok=True)
-        print(f"[MODEL] Unable to download trained deepfake model: {error}")
+        print("[MODEL] Unable to download the configured deepfake model.")

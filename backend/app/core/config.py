@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -53,7 +54,38 @@ class Settings(BaseSettings):
 settings = Settings()
 if settings.DATABASE_URL.startswith("postgres://"):
     settings.DATABASE_URL = settings.DATABASE_URL.replace("postgres://", "postgresql://", 1)
-if settings.ENVIRONMENT.lower() == "production" and not settings.DATABASE_URL.startswith("postgresql"):
-    raise RuntimeError("DATABASE_URL must be a PostgreSQL URL when ENVIRONMENT=production.")
+
+
+def _is_https_url(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        return parsed.scheme == "https" and bool(parsed.hostname) and parsed.username is None and parsed.password is None
+    except ValueError:
+        return False
+
+
+def validate_production_settings(config: Settings) -> None:
+    if config.ENVIRONMENT.strip().lower() != "production":
+        return
+    if not config.DATABASE_URL.startswith("postgresql"):
+        raise RuntimeError("DATABASE_URL must be a PostgreSQL URL when ENVIRONMENT=production.")
+
+    secret = config.SECRET_KEY.strip()
+    lowered_secret = secret.lower()
+    if len(secret) < 32 or any(
+        marker in lowered_secret
+        for marker in ("change-this", "replace-with", "your-secret", "example")
+    ):
+        raise RuntimeError("SECRET_KEY must be a non-default secret with at least 32 characters in production.")
+
+    if not config.FRONTEND_BASE_URL or not _is_https_url(config.FRONTEND_BASE_URL):
+        raise RuntimeError("FRONTEND_BASE_URL must be an HTTPS URL in production.")
+    if config.INTERVIEW_BASE_URL and not _is_https_url(config.INTERVIEW_BASE_URL):
+        raise RuntimeError("INTERVIEW_BASE_URL must be an HTTPS URL in production.")
+    if not config.FRONTEND_URLS or any(not _is_https_url(origin) for origin in config.FRONTEND_URLS):
+        raise RuntimeError("Every FRONTEND_URLS origin must use HTTPS in production.")
+
+
+validate_production_settings(settings)
 settings.REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 settings.MODELS_DIR.mkdir(parents=True, exist_ok=True)

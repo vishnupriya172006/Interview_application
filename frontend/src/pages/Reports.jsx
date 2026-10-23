@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, API_URL } from '../context/AuthContext';
+import { api } from '../context/AuthContext';
 import RecruiterLayout from '../components/RecruiterLayout';
 import { 
   Search, 
@@ -10,9 +10,7 @@ import {
   X,
   User,
   Calendar,
-  Clock,
-  ShieldCheck,
-  TrendingDown
+  Clock
 } from 'lucide-react';
 
 const Reports = () => {
@@ -32,7 +30,7 @@ const Reports = () => {
         const response = await api.get('/reports/');
         setReports(response.data);
       } catch (err) {
-        console.error('Error fetching reports list:', err);
+        console.error('Error fetching reports list.');
       } finally {
         setLoading(false);
       }
@@ -48,7 +46,7 @@ const Reports = () => {
       const response = await api.get(`/reports/${reportId}`);
       setReportDetail(response.data);
     } catch (err) {
-      console.error('Error fetching report details:', err);
+      console.error('Error fetching report details.');
     } finally {
       setDetailLoading(false);
     }
@@ -60,17 +58,34 @@ const Reports = () => {
     setReportDetail(null);
   };
 
+  const downloadReport = async (reportId) => {
+    try {
+      const response = await api.get(`/reports/${reportId}/download`, { responseType: 'blob' });
+      const url = URL.createObjectURL(response.data);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `interview-report-${reportId}.pdf`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Error downloading report.');
+    }
+  };
+
   // Filter and search reports
   const filteredReports = reports.filter((rep) => {
     // Note: Since report schema returns interview_id, to search by candidate name/email
     // we query details or fall back to matching paths/emails in local state if available.
     // If pdf_path contains candidate info, we can match against pdf_path, or report details.
     // For robust matching, we scan report metadata.
-    const riskMatch = riskFilter === 'all' || rep.risk_level.toLowerCase() === riskFilter.toLowerCase();
+    const effectiveRisk = rep.risk_level === 'review_required' || rep.integrity_score == null
+      ? 'review_required'
+      : rep.risk_level;
+    const riskMatch = riskFilter === 'all' || effectiveRisk.toLowerCase() === riskFilter.toLowerCase();
     
     // We can extract/deduce info from pdf_path (which contains meeting_id)
     const matchesSearch = rep.pdf_path.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          rep.risk_level.toLowerCase().includes(searchTerm.toLowerCase());
+                          effectiveRisk.toLowerCase().includes(searchTerm.toLowerCase());
                           
     return riskMatch && matchesSearch;
   });
@@ -139,6 +154,7 @@ const Reports = () => {
                 <tbody className="divide-y divide-dark-800/80 text-sm">
                   {filteredReports.map((rep) => {
                     const dateObj = new Date(rep.generated_at);
+                    const isReviewRequired = rep.risk_level === 'review_required' || rep.integrity_score == null;
                     const isHigh = rep.risk_level === 'high';
                     const isMed = rep.risk_level === 'medium';
                     
@@ -147,14 +163,16 @@ const Reports = () => {
                         <td className="px-6 py-4 font-mono text-xs max-w-[240px] truncate">
                           {osBasename(rep.pdf_path)}
                         </td>
-                        <td className="px-6 py-4 font-bold text-dark-100">{rep.integrity_score.toFixed(1)}/100</td>
+                        <td className="px-6 py-4 font-bold text-dark-100">{isReviewRequired ? 'Unavailable' : `${rep.integrity_score.toFixed(1)}/100`}</td>
                         <td className="px-6 py-4">
                           <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-extrabold uppercase ${
-                            isHigh 
+                            isReviewRequired
+                              ? 'bg-slate-500/10 text-slate-300 border border-slate-500/20'
+                              : isHigh
                               ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' 
                               : (isMed ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20')
                           }`}>
-                            {rep.risk_level} Risk
+                            {isReviewRequired ? 'Review Required' : `${rep.risk_level} Risk`}
                           </span>
                         </td>
                         <td className="px-6 py-4">{dateObj.toLocaleString()}</td>
@@ -166,14 +184,13 @@ const Reports = () => {
                             View Stats
                             <ArrowUpRight className="h-3.5 w-3.5" />
                           </button>
-                          <a
-                            href={`${API_URL}/reports/${rep.id}/download`}
-                            download
+                          <button
+                            onClick={() => downloadReport(rep.id)}
                             className="inline-flex items-center gap-1 bg-brand-600/10 hover:bg-brand-600 text-brand-400 hover:text-white border border-brand-500/20 hover:border-brand-600 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
                           >
                             <FileDown className="h-3.5 w-3.5" />
                             PDF
-                          </a>
+                          </button>
                         </td>
                       </tr>
                     );
@@ -204,7 +221,7 @@ const Reports = () => {
                   {/* Modal Header */}
                   <div className="space-y-2 border-b border-dark-800/80 pb-4">
                     <h3 className="text-xl font-bold tracking-tight">Integrity Log breakdown</h3>
-                    <p className="text-xs text-dark-300">Detailed metric summary logs for review.</p>
+                    <p className="text-xs text-dark-300">Automated flags are observations for human review, not proof of misconduct. Unavailable means the model did not store evidence.</p>
                   </div>
 
                   {/* Section 1: Candidate Card */}
@@ -223,7 +240,7 @@ const Reports = () => {
                     </div>
                     <div className="space-y-1">
                       <p className="text-dark-300 font-semibold flex items-center gap-1">🛡️ Integrity score</p>
-                      <p className="font-bold text-dark-100">{reportDetail.report.integrity_score.toFixed(1)}/100</p>
+                      <p className="font-bold text-dark-100">{reportDetail.report.risk_level === 'review_required' || reportDetail.report.integrity_score == null ? 'Unavailable' : `${reportDetail.report.integrity_score.toFixed(1)}/100`}</p>
                     </div>
                   </div>
 
@@ -233,26 +250,26 @@ const Reports = () => {
                     <div className="grid grid-cols-2 gap-4">
                       {/* Deepfake */}
                       <div className="p-3 bg-dark-950/40 border border-dark-800 rounded-xl space-y-1">
-                        <p className="text-[10px] font-semibold text-dark-300">AVG DEEPFAKE CONFIDENCE</p>
-                        <p className="text-lg font-bold text-indigo-400">{reportDetail.stats.avg_deepfake.toFixed(1)}%</p>
+                        <p className="text-[10px] font-semibold text-dark-300">MEAN DEEPFAKE MODEL OUTPUT</p>
+                        <p className="text-lg font-bold text-indigo-400">{reportDetail.stats.avg_deepfake == null ? 'Unavailable' : `${reportDetail.stats.avg_deepfake.toFixed(1)}%`}</p>
                       </div>
                       
                       {/* Gaze deviation */}
                       <div className="p-3 bg-dark-950/40 border border-dark-800 rounded-xl space-y-1">
                         <p className="text-[10px] font-semibold text-dark-300">TIME LOOKING AWAY</p>
-                        <p className="text-lg font-bold text-indigo-400">{reportDetail.stats.gaze_away_ratio.toFixed(1)}%</p>
+                        <p className="text-lg font-bold text-indigo-400">{reportDetail.stats.gaze_away_ratio == null ? 'Unavailable' : `${reportDetail.stats.gaze_away_ratio.toFixed(1)}%`}</p>
                       </div>
 
                       {/* Phone visibility */}
                       <div className="p-3 bg-dark-950/40 border border-dark-800 rounded-xl space-y-1">
                         <p className="text-[10px] font-semibold text-dark-300">PHONE VISIBILITY ALARMS</p>
-                        <p className="text-lg font-bold text-rose-400">{reportDetail.stats.phone_detections} events</p>
+                        <p className="text-lg font-bold text-rose-400">{reportDetail.stats.analysis_status.phone === 'analyzed' ? `${reportDetail.stats.phone_detections} detections` : 'Unavailable'}</p>
                       </div>
 
                       {/* Liveness checkpoint */}
                       <div className="p-3 bg-dark-950/40 border border-dark-800 rounded-xl space-y-1">
                         <p className="text-[10px] font-semibold text-dark-300">LIVENESS ANOMALIES</p>
-                        <p className="text-lg font-bold text-rose-400">{reportDetail.stats.liveness_anomalies} flags</p>
+                        <p className="text-lg font-bold text-rose-400">{reportDetail.stats.analysis_status.liveness === 'analyzed' ? `${reportDetail.stats.liveness_anomalies} flags` : 'Unavailable'}</p>
                       </div>
                     </div>
                   </div>
@@ -262,7 +279,7 @@ const Reports = () => {
                     <h4 className="text-xs font-bold uppercase tracking-wider text-dark-300 mb-2">High Severity Alarm Events</h4>
                     <div className="flex-1 overflow-y-auto space-y-2 pr-1 border border-dark-800 rounded-xl p-3 bg-dark-950/20">
                       {reportDetail.events.length === 0 ? (
-                        <p className="text-xs text-dark-300 text-center py-4">No major integrity alarms recorded.</p>
+                        <p className="text-xs text-dark-300 text-center py-4">No monitoring events were recorded; this does not establish that no anomalies occurred.</p>
                       ) : (
                         reportDetail.events.map(e => (
                           <div 
@@ -288,14 +305,13 @@ const Reports = () => {
 
                   {/* Actions footer */}
                   <div className="pt-4 border-t border-dark-800">
-                    <a
-                      href={`${API_URL}/reports/${reportDetail.report.id}/download`}
-                      download
+                    <button
+                      onClick={() => downloadReport(reportDetail.report.id)}
                       className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 font-bold py-3.5 rounded-xl transition-all text-white glow-indigo"
                     >
                       <FileDown className="h-5 w-5" />
                       Download Official Integrity Certificate
-                    </a>
+                    </button>
                   </div>
                 </div>
               ) : (

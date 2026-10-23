@@ -13,8 +13,8 @@ class Report(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     interview_id = Column(String(36), ForeignKey("interviews.id", ondelete="CASCADE"), nullable=False)
     pdf_path = Column(String(500), nullable=False)
-    integrity_score = Column(Float, nullable=False)
-    risk_level = Column(String(20), nullable=False) # low, medium, high
+    integrity_score = Column(Float, nullable=True)
+    risk_level = Column(String(50), nullable=False) # low, medium, high, review_required
     generated_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationship

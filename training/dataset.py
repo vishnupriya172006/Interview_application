@@ -131,3 +131,4 @@ if __name__ == "__main__":
         print(f"  {data_path}/train/fake/")
         print(f"  {data_path}/val/real/")
         print(f"  {data_path}/val/fake/")
+        raise SystemExit(1)

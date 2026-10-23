@@ -1,7 +1,44 @@
 import smtplib
+from html import escape
+from urllib.parse import quote
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from app.core.config import settings
+
+
+def send_password_reset_email(email: str, token: str) -> bool:
+    """Send a one-hour, password-reset-only token without logging its value."""
+    if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
+        return False
+
+    base_url = settings.FRONTEND_BASE_URL.rstrip("/") or (
+        settings.FRONTEND_URLS[0].rstrip("/") if settings.FRONTEND_URLS else ""
+    )
+    if not base_url:
+        return False
+
+    reset_url = f"{base_url}/reset-password?token={quote(token, safe='')}"
+    message = MIMEMultipart("alternative")
+    message["Subject"] = "InterviewGuard password reset"
+    message["From"] = settings.SMTP_FROM
+    message["To"] = email
+    message.attach(MIMEText(
+        f"Use this link within one hour to reset your InterviewGuard password: {reset_url}",
+        "plain",
+    ))
+    message.attach(MIMEText(
+        f"<p>Use this link within one hour to reset your InterviewGuard password:</p><p><a href=\"{escape(reset_url, quote=True)}\">Reset password</a></p>",
+        "html",
+    ))
+    try:
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+            server.starttls()
+            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.sendmail(settings.SMTP_FROM, email, message.as_string())
+        return True
+    except Exception:
+        print("Password reset email delivery failed.")
+        return False
 
 def send_interview_invitation(
     candidate_name: str, 
@@ -92,7 +129,7 @@ def send_interview_invitation(
                 <span class="logo">InterviewGuard AI</span>
                 <h2>Interview Invitation</h2>
             </div>
-            <p>Dear {candidate_name},</p>
+            <p>Dear {escape(candidate_name)},</p>
             <p>You have been invited to participate in a live online video interview. Please find the details of the session below:</p>
             
             <div class="details">
@@ -112,7 +149,7 @@ def send_interview_invitation(
                 </table>
             </div>
             
-            <p><strong>Note:</strong> This session will utilize <b>InterviewGuard AI</b> integrity monitoring (including eye gaze tracking, device detection, and identity verification) to ensure the authenticity and security of the interview process. Please ensure you are in a quiet, well-lit room and join using a desktop/laptop computer with an active webcam and microphone.</p>
+            <p><strong>Note:</strong> This session may process camera frames for supported monitoring observations. Model availability varies by deployment. Automated flags require human review and are not proof of misconduct. Please ensure you are in a quiet, well-lit room and join using a desktop/laptop computer with an active webcam and microphone.</p>
             
             <div class="btn-container">
                 <a href="{join_url}" class="btn">Join Interview Lobby</a>
@@ -132,11 +169,10 @@ def send_interview_invitation(
     if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
         print("\n" + "=" * 60)
         print("MOCK EMAIL SENT (SMTP NOT CONFIGURED)")
-        print(f"To: {candidate_email}")
         print(f"Subject: Live Interview Invitation - InterviewGuard AI")
-        print(f"Join Link: {join_url}")
+        print("Invitation credentials were not logged; email was not delivered.")
         print("=" * 60 + "\n")
-        return True
+        return False
 
     try:
         msg = MIMEMultipart('alternative')
@@ -151,9 +187,8 @@ def send_interview_invitation(
             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
             server.sendmail(settings.SMTP_FROM, candidate_email, msg.as_string())
             
-        print(f"Successfully sent invitation email to {candidate_email}")
+        print("Successfully sent interview invitation email.")
         return True
-    except Exception as e:
-        print(f"Error sending invitation email via SMTP: {e}")
-        # Return true since we mock it as successful to prevent API failure
-        return True
+    except Exception:
+        print("Error sending invitation email via SMTP.")
+        return False
